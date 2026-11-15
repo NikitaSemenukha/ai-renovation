@@ -1,3 +1,5 @@
+import type { RoomDesign } from './design';
+
 /**
  * Доменная модель проекта. Чистый TypeScript без зависимостей от UI —
  * переиспользуется в веб- и будущем мобильном приложении.
@@ -277,4 +279,6 @@ export interface Project {
   name: string;
   createdAt: string;
   data: ProjectDraft;
+  /** Варианты дизайна от ИИ по комнатам (ключ — id комнаты), новые первыми. */
+  designs?: Record<string, RoomDesign[]>;
 }

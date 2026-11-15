@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createEmptyDraft, createFinishes, type Project, type ProjectDraft } from '@air/domain';
+import { createEmptyDraft, createFinishes, type Project, type ProjectDraft, type RoomDesign } from '@air/domain';
 import { DEMO_PLAN } from '../demo/demoPlan';
 import { defaultCurrency } from '../labels';
 import { DRAFT_FILE_KEY, fileStore, logFileError, projectFileKey } from './fileStore';
@@ -25,9 +25,12 @@ interface ProjectsState {
   startEditing: (projectId: string) => Promise<void>;
   saveDraft: (name: string) => Promise<string>;
   deleteProject: (id: string) => void;
+  /** Сохранить вариант дизайна комнаты от ИИ (храним 3 последних на комнату). */
+  addRoomDesign: (projectId: string, design: RoomDesign) => void;
 }
 
 const newDraft = () => createEmptyDraft(DEMO_PLAN);
+const MAX_DESIGNS_PER_ROOM = 3;
 
 /**
  * Миграция v0 → v1: в геометрию добавлены проёмы (окна/двери), в черновик — отделка.
@@ -135,6 +138,16 @@ export const useProjects = create<ProjectsState>()(
           }
           get().resetDraft();
           return project.id;
+        },
+
+        addRoomDesign: (projectId, design) => {
+          set((s) => ({
+            projects: s.projects.map((p) => {
+              if (p.id !== projectId) return p;
+              const prev = p.designs?.[design.roomId] ?? [];
+              return { ...p, designs: { ...p.designs, [design.roomId]: [design, ...prev].slice(0, MAX_DESIGNS_PER_ROOM) } };
+            }),
+          }));
         },
 
         deleteProject: (id) => {

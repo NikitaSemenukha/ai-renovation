@@ -4,6 +4,7 @@ import { Alert, Button, Card, Col, Descriptions, Result, Row, Space, Typography 
 import { Link, useNavigate, useParams } from 'react-router';
 import { completenessPercent, findConflicts, type ProjectDraft, type ProjectGoal } from '@air/domain';
 import { IssuesList } from '../components/IssuesList';
+import { DesignPanel } from '../features/design/DesignPanel';
 import { FinishesSummary } from '../features/finishes/FinishesSummary';
 import { PlanCanvas } from '../features/plan/PlanCanvas';
 import { PlanLegend } from '../features/plan/PlanLegend';
@@ -201,6 +202,8 @@ export function ProjectPage() {
         </Col>
       </Row>
 
+      <DesignPanel project={project} onEdit={() => void edit()} />
+
       <Alert
         type="info"
         showIcon
@@ -208,7 +211,7 @@ export function ProjectPage() {
         description={
           <>
             <Typography.Paragraph style={{ marginBottom: 8 }}>
-              Данные проекта сохранены в вашем браузере. Генерация вариантов планировки, визуализация выбранной отделки, 3D и смета — следующие этапы
+              Данные проекта сохранены в вашем браузере. Дизайн комнат от ИИ — выше. Варианты перепланировки, фотореалистичные рендеры и смета — следующие этапы
               разработки прототипа. Вы можете уточнить данные сейчас: чем выше полнота, тем точнее будут варианты.
             </Typography.Paragraph>
             <Space wrap>
