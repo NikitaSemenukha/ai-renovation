@@ -33,4 +33,16 @@ export const DEMO_PLAN: PlanGeometry = {
     { id: 'hall', name: 'Коридор', kind: 'hall', position: { x: 4400, y: 4350 }, polygon: rect(3500, 2200, 5300, 6500) },
     { id: 'bedroom', name: 'Спальня', kind: 'bedroom', position: { x: 7150, y: 3250 }, polygon: rect(5300, 0, 9000, 6500) },
   ],
+  // offsetMm — от точки a стены. Окна и двери нужны для штор и выбора дверей в шаге «Отделка».
+  openings: [
+    { id: 'win-kitchen', kind: 'window', wallId: 'ext-n', offsetMm: 1000, widthMm: 1400 },
+    { id: 'win-bedroom-n', kind: 'window', wallId: 'ext-n', offsetMm: 6400, widthMm: 1500 },
+    { id: 'win-bedroom-e', kind: 'window', wallId: 'ext-e', offsetMm: 2500, widthMm: 1500 },
+    { id: 'win-living', kind: 'window', wallId: 'ext-s', offsetMm: 6500, widthMm: 1500 },
+    { id: 'door-entrance', kind: 'door', wallId: 'ext-s', offsetMm: 4200, widthMm: 900 },
+    { id: 'door-kitchen', kind: 'door', wallId: 'core', offsetMm: 2300, widthMm: 700 },
+    { id: 'door-living', kind: 'door', wallId: 'core', offsetMm: 4000, widthMm: 800 },
+    { id: 'door-bath', kind: 'door', wallId: 'bath-hall', offsetMm: 500, widthMm: 700 },
+    { id: 'door-bedroom', kind: 'door', wallId: 'hall-bedroom', offsetMm: 4000, widthMm: 800 },
+  ],
 };

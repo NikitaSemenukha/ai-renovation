@@ -7,7 +7,7 @@
 export type ProjectGoal = 'live' | 'rent_long' | 'rent_daily' | 'sale';
 export type PropertyType = 'apartment' | 'house';
 export type BuildingType = 'panel' | 'brick' | 'monolith' | 'unknown';
-export type ProjectStage = 'buying' | 'living' | 'renovating';
+export type ProjectStage = 'buying' | 'living' | 'renovating' | 'selling';
 
 export interface PropertyInfo {
   propertyType?: PropertyType;
@@ -75,6 +75,17 @@ export interface Room {
   polygon: Point[];
 }
 
+/** Проём в стене: окно или дверь. offsetMm — от точки a стены до начала проёма. */
+export type OpeningKind = 'window' | 'door';
+
+export interface Opening {
+  id: string;
+  kind: OpeningKind;
+  wallId: string;
+  offsetMm: number;
+  widthMm: number;
+}
+
 /** Откуда взялась геометрия: демо-план не считается данными клиента. */
 export type GeometrySource = 'demo' | 'recognized' | 'manual';
 
@@ -83,6 +94,8 @@ export interface PlanGeometry {
   source: GeometrySource;
   walls: Wall[];
   rooms: Room[];
+  /** Окна и двери. Пустой массив — проёмы неизвестны (а не «их нет»). */
+  openings: Opening[];
   /** Габариты плана для отображения. */
   bounds: { width: number; height: number };
 }
@@ -113,6 +126,8 @@ export interface RentLongProfile {
   targetTenant?: TenantType;
   layoutPreference?: 'max_rooms' | 'spacious_living';
   expectedMonthlyRent?: number;
+  /** Валюта ставки аренды (UAH, USD, EUR). */
+  rentCurrency?: string;
   furnished?: boolean;
 }
 
@@ -125,6 +140,10 @@ export interface RentDailyProfile {
 
 export interface SaleProfile {
   targetBuyer?: 'young_family' | 'investor' | 'senior';
+  /**
+   * @deprecated Бюджет подготовки к продаже теперь один — `wishes.budget`.
+   * Поле осталось только для миграции старых данных.
+   */
   prepBudget?: number;
   needsListingVisuals?: boolean;
 }
@@ -166,6 +185,76 @@ export interface Wishes {
   startTimeframe?: Timeframe;
 }
 
+// ---------- Отделка по комнатам (созвон 09.11.2026) ----------
+
+export type CeilingType = 'stretch' | 'combined' | 'drywall';
+/** Фактура натяжного потолка; сатин — средняя матовость. */
+export type StretchFinish = 'gloss' | 'satin' | 'matte';
+export type StretchJoint = 'straight' | 'shadow';
+export type DrywallShape = 'flat' | 'complex';
+export type MainLight = 'chandelier' | 'chandelier_spots' | 'spots';
+export type WallFinish = 'wallpaper' | 'paint' | 'panels' | 'tile';
+export type PanelMaterial = 'bamboo' | 'chipboard' | 'mdf_painted';
+export type FloorFinish = 'tile' | 'laminate' | 'vinyl' | 'self_leveling';
+export type DoorType = 'hidden' | 'classic';
+export type PlumbingItem = 'sink' | 'shower' | 'bathtub' | 'toilet';
+export type FurnitureItem =
+  | 'sofa'
+  | 'armchairs'
+  | 'coffee_table'
+  | 'tv_zone'
+  | 'shelving'
+  | 'dining_table'
+  | 'chairs'
+  | 'kitchen_set'
+  | 'stove'
+  | 'fridge'
+  | 'bed'
+  | 'wardrobe'
+  | 'nightstands'
+  | 'dresser'
+  | 'desk'
+  | 'shoe_rack'
+  | 'mirror'
+  | 'vanity'
+  | 'washer';
+export type CurtainColor = 'white' | 'beige' | 'grey' | 'graphite' | 'olive' | 'terracotta' | 'blue' | 'blackout_dark';
+export type SocketColor = 'white' | 'black' | 'beige';
+export type FixtureColor = 'white' | 'black' | 'gold';
+
+export interface RoomFinishes {
+  ceiling?: CeilingType;
+  /** Для натяжного и комбинированного. */
+  stretchFinish?: StretchFinish;
+  stretchJoint?: StretchJoint;
+  /** Для гипсокартона. */
+  drywallShape?: DrywallShape;
+  /** Для комбинированного: короб по периметру с подсветкой. */
+  perimeterBox?: boolean;
+  mainLight?: MainLight;
+  wallLighting?: boolean;
+  ceilingLighting?: boolean;
+  walls?: WallFinish;
+  panelMaterial?: PanelMaterial;
+  /** Рамки-молдинги на стенах — только для классики. */
+  moldings?: boolean;
+  floor?: FloorFinish;
+  door?: DoorType;
+  plumbing: PlumbingItem[];
+  furniture: FurnitureItem[];
+  curtainColor?: CurtainColor;
+  /** Тюль — обычно белый, выбирать цвет не нужно. */
+  tulle?: boolean;
+}
+
+export interface Finishes {
+  /** Ключ — id комнаты из геометрии. */
+  rooms: Record<string, RoomFinishes>;
+  socketColor?: SocketColor;
+  socketBrand?: string;
+  fixtureColor?: FixtureColor;
+}
+
 // ---------- Черновик и проект ----------
 
 export interface ProjectDraft {
@@ -180,6 +269,7 @@ export interface ProjectDraft {
   engineeringReviewed: boolean;
   occupants: OccupantsDraft;
   wishes: Wishes;
+  finishes: Finishes;
 }
 
 export interface Project {

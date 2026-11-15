@@ -1,5 +1,5 @@
 import { useRef, type MouseEvent } from 'react';
-import type { EngineeringPoint, PlanGeometry, Point, Wall } from '@air/domain';
+import type { EngineeringPoint, Opening, PlanGeometry, Point, Room, Wall } from '@air/domain';
 import { ENGINEERING_LABELS, WALL_STATUS_COLORS } from '../../labels';
 
 interface PlanCanvasProps {
@@ -11,6 +11,11 @@ interface PlanCanvasProps {
   onPointClick?: (point: EngineeringPoint) => void;
   /** Показывать размеры стен. */
   showDimensions?: boolean;
+  /** Выбор комнаты кликом (шаг «Отделка»). */
+  selectedRoomId?: string;
+  onRoomClick?: (room: Room) => void;
+  /** Заливка комнаты, например «отделка выбрана». */
+  roomFill?: (room: Room) => string | undefined;
 }
 
 const PAD = 700;
@@ -28,6 +33,9 @@ export function PlanCanvas({
   onCanvasClick,
   onPointClick,
   showDimensions = false,
+  selectedRoomId,
+  onRoomClick,
+  roomFill,
 }: PlanCanvasProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const { width, height } = geometry.bounds;
@@ -52,8 +60,30 @@ export function PlanCanvas({
     >
       <rect x={0} y={0} width={width} height={height} fill="#fff" />
 
+      {geometry.rooms.map((r) => {
+        const selected = r.id === selectedRoomId;
+        const fill = selected ? '#bae0ff' : roomFill?.(r);
+        if (!fill && !onRoomClick) return null;
+        return (
+          <polygon
+            key={`fill-${r.id}`}
+            points={r.polygon.map((p) => `${p.x},${p.y}`).join(' ')}
+            fill={fill ?? 'transparent'}
+            onClick={(e) => {
+              if (!onRoomClick) return;
+              e.stopPropagation();
+              onRoomClick(r);
+            }}
+            style={{ cursor: onRoomClick ? 'pointer' : 'inherit' }}
+          >
+            <title>{r.name}</title>
+          </polygon>
+        );
+      })}
+
       {geometry.rooms.map((r) => (
-        <text key={r.id} x={r.position.x} y={r.position.y} textAnchor="middle" fontSize={260} fill="#595959">
+        <text key={r.id} x={r.position.x} y={r.position.y} textAnchor="middle" fontSize={260} fill="#595959"
+          fontWeight={r.id === selectedRoomId ? 700 : 400} style={{ pointerEvents: 'none' }}>
           {r.name}
         </text>
       ))}
@@ -90,6 +120,10 @@ export function PlanCanvas({
         );
       })}
 
+      {(geometry.openings ?? []).map((o) => (
+        <OpeningMark key={o.id} opening={o} geometry={geometry} />
+      ))}
+
       {showDimensions && <Dimensions width={width} height={height} />}
 
       {engineering.map((p) => {
@@ -111,6 +145,43 @@ export function PlanCanvas({
         );
       })}
     </svg>
+  );
+}
+
+/** Окно — двойная голубая линия в стене; дверь — проём с дугой открывания. */
+function OpeningMark({ opening, geometry }: { opening: Opening; geometry: PlanGeometry }) {
+  const wall = geometry.walls.find((w) => w.id === opening.wallId);
+  if (!wall) return null;
+  const dx = wall.b.x - wall.a.x;
+  const dy = wall.b.y - wall.a.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return null;
+  const ux = dx / len;
+  const uy = dy / len;
+  const s = { x: wall.a.x + ux * opening.offsetMm, y: wall.a.y + uy * opening.offsetMm };
+  const e = { x: s.x + ux * opening.widthMm, y: s.y + uy * opening.widthMm };
+  const t = Math.max(wall.thicknessMm, MIN_STROKE) + 10;
+
+  if (opening.kind === 'window') {
+    const nx = -uy * (t / 4);
+    const ny = ux * (t / 4);
+    return (
+      <g style={{ pointerEvents: 'none' }}>
+        <line x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#fff" strokeWidth={t} />
+        <line x1={s.x + nx} y1={s.y + ny} x2={e.x + nx} y2={e.y + ny} stroke="#1677ff" strokeWidth={30} />
+        <line x1={s.x - nx} y1={s.y - ny} x2={e.x - nx} y2={e.y - ny} stroke="#1677ff" strokeWidth={30} />
+      </g>
+    );
+  }
+  // Дверь открывается внутрь помещения по нормали стены
+  const w = opening.widthMm;
+  const leaf = { x: s.x - uy * w, y: s.y + ux * w };
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      <line x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#fff" strokeWidth={t} />
+      <line x1={s.x} y1={s.y} x2={leaf.x} y2={leaf.y} stroke="#8c8c8c" strokeWidth={30} />
+      <path d={`M ${leaf.x} ${leaf.y} A ${w} ${w} 0 0 ${0} ${e.x} ${e.y}`} fill="none" stroke="#bfbfbf" strokeWidth={20} strokeDasharray="60 40" />
+    </g>
   );
 }
 

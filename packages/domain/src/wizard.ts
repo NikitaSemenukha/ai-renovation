@@ -1,3 +1,4 @@
+import { createFinishes, finishesComplete, isRoomFinished } from './finishes';
 import { findConflicts, fieldErrors, stepFieldErrors } from './issues';
 import { WIZARD_STEPS, type WizardStepId } from './steps';
 import type { OccupantsDraft, PlanGeometry, ProjectDraft, ProjectGoal } from './types';
@@ -22,6 +23,7 @@ export function createEmptyDraft(geometry: PlanGeometry): ProjectDraft {
       sale: {},
     },
     wishes: { text: '', goals: [], styles: [] },
+    finishes: createFinishes(geometry),
   };
 }
 
@@ -122,6 +124,13 @@ export function stepMissing(step: WizardStepId, d: ProjectDraft): string[] {
       if (!d.wishes.interventionLevel) m.push('насколько глубоко меняем');
       if (d.wishes.goals.length === 0 && !d.wishes.text.trim()) m.push('хотя бы одна цель или описание');
       break;
+    case 'finishes': {
+      const ctx = { geometry: d.geometry, styles: d.wishes.styles };
+      const left = d.geometry.rooms.filter((r) => !isRoomFinished(r, d.finishes, ctx)).map((r) => r.name);
+      if (left.length) m.push(`отделка: ${left.join(', ')}`);
+      if (!d.finishes.socketColor) m.push('цвет розеток');
+      break;
+    }
   }
   return [...m, ...stepFieldErrors(step, d)];
 }
@@ -161,11 +170,16 @@ export function completenessBreakdown(d: ProjectDraft): CompletenessItem[] {
     },
     { label: 'Жильцы и цель изменений', weight: 10, done: isStepComplete('occupants', d) && isStepComplete('wishes', d) },
     { label: 'Известен тип дома', weight: 5, done: Boolean(d.property.buildingType && d.property.buildingType !== 'unknown') },
-    { label: 'Разметка стен', weight: 15, done: d.wallsReviewed },
-    { label: 'Инженерные точки', weight: 15, done: d.engineering.length > 0 },
+    { label: 'Разметка стен', weight: 10, done: d.wallsReviewed },
+    { label: 'Инженерные точки', weight: 10, done: d.engineering.length > 0 },
     { label: 'Подробный профиль жильцов', weight: 10, done: hasDetailedProfile(d.goal, d.occupants) },
     { label: 'Бюджет', weight: 5, done: d.wishes.budget !== undefined && !fieldErrors(d)['wishes.budget'] },
     { label: 'Стиль', weight: 5, done: d.wishes.styles.length > 0 },
+    {
+      label: 'Отделка по комнатам',
+      weight: 10,
+      done: finishesComplete(d.finishes, { geometry: d.geometry, styles: d.wishes.styles }),
+    },
   ];
 }
 

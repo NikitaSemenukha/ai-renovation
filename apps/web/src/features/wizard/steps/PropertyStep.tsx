@@ -20,7 +20,10 @@ export function PropertyStep() {
 
   return (
     <>
-      <Field id="property-type" label="Тип объекта" required>
+      <Field id="property-type" label="Тип объекта" required
+        hint={p.propertyType === 'house'
+          ? 'для домов анкета пока квартирная: этажи, материал стен и план каждого этажа появятся в отдельной ветке'
+          : 'дома — скоро: для них нужна отдельная анкета (этажи, материал стен, план каждого этажа)'}>
         <Radio.Group
           optionType="button"
           aria-labelledby="property-type-label"
@@ -28,7 +31,9 @@ export function PropertyStep() {
           onChange={(e) => update((d) => void (d.property.propertyType = e.target.value as PropertyType))}
           options={(Object.keys(PROPERTY_TYPE_LABELS) as PropertyType[]).map((v) => ({
             value: v,
-            label: PROPERTY_TYPE_LABELS[v],
+            // Дом скрыт до своей ветки анкеты; уже выбранный в старом черновике остаётся видимым
+            label: v === 'house' && p.propertyType !== 'house' ? `${PROPERTY_TYPE_LABELS[v]} (скоро)` : PROPERTY_TYPE_LABELS[v],
+            disabled: v === 'house' && p.propertyType !== 'house',
           }))}
         />
       </Field>

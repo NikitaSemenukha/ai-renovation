@@ -6,7 +6,11 @@ import type {
   ProjectGoal,
   ProjectStage,
   PropertyType,
+  RentDailyProfile,
+  RentLongProfile,
+  SaleProfile,
   StyleCode,
+  TenantType,
   Timeframe,
   WallStatus,
   WallStatusSource,
@@ -33,7 +37,44 @@ export const STAGE_LABELS: Record<ProjectStage, string> = {
   buying: 'Покупаю',
   living: 'Живу',
   renovating: 'Уже ремонт',
+  selling: 'Продаю',
 };
+
+// ---------- Ответы веток «Жильцы» (одни подписи для формы и сводки проекта) ----------
+
+export const TENANT_LABELS: Record<TenantType, string> = {
+  students: 'Студенты',
+  couple: 'Пара',
+  family: 'Семья',
+  remote_worker: 'Удалёнщик',
+  expats: 'Экспаты',
+};
+
+export const LAYOUT_PREF_LABELS: Record<NonNullable<RentLongProfile['layoutPreference']>, string> = {
+  max_rooms: 'Максимум комнат',
+  spacious_living: 'Просторная гостиная',
+};
+
+export const GUEST_TYPE_LABELS: Record<NonNullable<RentDailyProfile['guestType']>, string> = {
+  couples: 'Пары',
+  families: 'Семьи',
+  business: 'Командировочные',
+};
+
+export const BUYER_LABELS: Record<NonNullable<SaleProfile['targetBuyer']>, string> = {
+  young_family: 'Молодая семья',
+  investor: 'Инвестор',
+  senior: 'Пенсионер',
+};
+
+export const CURRENCIES = ['UAH', 'USD', 'EUR'];
+
+/** Валюта по умолчанию по стране объекта. */
+export function defaultCurrency(country?: string) {
+  const c = country?.trim().toLowerCase() ?? '';
+  if (c.startsWith('укр') || c.startsWith('ukr')) return 'UAH';
+  return 'USD';
+}
 
 export const PLAN_SOURCE_LABELS: Record<PlanSource, { title: string; hint: string }> = {
   tech_passport: { title: 'Техпаспорт (БТИ)', hint: 'Лучший вариант: размеры, площади, толщина стен' },

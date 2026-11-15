@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { InboxOutlined } from '@ant-design/icons';
 import { Alert, App, Typography, Upload } from 'antd';
 import type { PlanSource } from '@air/domain';
@@ -8,6 +9,18 @@ import { useDraft } from '../useDraft';
 
 const SOURCES = Object.keys(PLAN_SOURCE_LABELS) as PlanSource[];
 const MAX_FILE_MB = 20;
+const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+
+/** Проверка файла плана: фильтр диалога выбора — только подсказка, его легко обойти. */
+function fileProblem(file: File): string | undefined {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.heic') || name.endsWith('.heif') || file.type === 'image/heic' || file.type === 'image/heif') {
+    return 'Формат HEIC (фото с iPhone) пока не поддерживается. Сохраните фото как JPG: в iPhone — «Настройки → Камера → Форматы → Наиболее совместимый», или сделайте скриншот плана.';
+  }
+  if (!ACCEPTED_TYPES.includes(file.type)) return 'Этот тип файла не подходит. Загрузите PDF, JPG, PNG или WebP.';
+  if (file.size > MAX_FILE_MB * 1024 * 1024) return `Файл больше ${MAX_FILE_MB} МБ`;
+  return undefined;
+}
 
 export function PlanStep() {
   const { draft, update } = useDraft();
@@ -16,6 +29,7 @@ export function PlanStep() {
   const setPlanFile = useProjects((s) => s.setPlanFile);
   const { source, fileName, fileType } = draft.plan;
   const needsFile = source !== undefined && FILE_PLAN_SOURCES.includes(source);
+  const [brokenPreview, setBrokenPreview] = useState<string>();
 
   return (
     <>
@@ -30,14 +44,16 @@ export function PlanStep() {
       {needsFile && (
         <div style={{ marginTop: 20 }}>
           <Upload.Dragger
-            accept="image/*,.pdf"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
             multiple={false}
             showUploadList={false}
             beforeUpload={(file) => {
-              if (file.size > MAX_FILE_MB * 1024 * 1024) {
-                message.error(`Файл больше ${MAX_FILE_MB} МБ`);
+              const problem = fileProblem(file);
+              if (problem) {
+                message.error({ content: problem, duration: 6 });
                 return Upload.LIST_IGNORE;
               }
+              setBrokenPreview(undefined);
               void setPlanFile(file);
               return false; // на сервер не отправляем: бэкенда пока нет
             }}
@@ -46,10 +62,15 @@ export function PlanStep() {
             <p className="ant-upload-text">
               {fileName ? `Загружен: ${fileName}. Нажмите, чтобы заменить` : 'Перетащите файл сюда или нажмите, чтобы выбрать'}
             </p>
-            <p className="ant-upload-hint">PDF, JPG или PNG до {MAX_FILE_MB} МБ</p>
+            <p className="ant-upload-hint">PDF, JPG, PNG или WebP до {MAX_FILE_MB} МБ</p>
           </Upload.Dragger>
-          {previewUrl && (
-            <img src={previewUrl} alt="Загруженный план" style={{ marginTop: 12, maxWidth: '100%', maxHeight: 320, borderRadius: 8 }} />
+          {previewUrl && brokenPreview !== previewUrl && (
+            <img src={previewUrl} alt="Загруженный план" style={{ marginTop: 12, maxWidth: '100%', maxHeight: 320, borderRadius: 8 }}
+              onError={() => setBrokenPreview(previewUrl)} />
+          )}
+          {previewUrl && brokenPreview === previewUrl && (
+            <Alert style={{ marginTop: 12 }} type="error" showIcon title="Не удалось открыть изображение"
+              description="Файл, похоже, повреждён или сохранён в неподдерживаемом формате. Загрузите другой файл плана." />
           )}
           {fileName && fileType === 'application/pdf' && (
             <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>

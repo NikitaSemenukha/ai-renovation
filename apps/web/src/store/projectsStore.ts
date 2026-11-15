@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createEmptyDraft, type Project, type ProjectDraft } from '@air/domain';
+import { createEmptyDraft, createFinishes, type Project, type ProjectDraft } from '@air/domain';
 import { DEMO_PLAN } from '../demo/demoPlan';
+import { defaultCurrency } from '../labels';
 import { DRAFT_FILE_KEY, fileStore, logFileError, projectFileKey } from './fileStore';
 
 /**
@@ -27,6 +28,28 @@ interface ProjectsState {
 }
 
 const newDraft = () => createEmptyDraft(DEMO_PLAN);
+
+/**
+ * Миграция v0 → v1: в геометрию добавлены проёмы (окна/двери), в черновик — отделка.
+ * Демо-план получает размеченные проёмы; для остальных проёмы неизвестны.
+ */
+/**
+ * Миграция v1 → v2: у продажи был отдельный «бюджет подготовки» без валюты.
+ * Теперь бюджет один — `wishes.budget`; старое значение переносим, если бюджет не задан.
+ */
+function migrateSaleBudget(d: ProjectDraft): ProjectDraft {
+  const { prepBudget, ...sale } = d.occupants.sale;
+  const budget =
+    d.wishes.budget ?? (prepBudget ? { min: 0, max: prepBudget, currency: defaultCurrency(d.property.country) } : undefined);
+  return { ...d, occupants: { ...d.occupants, sale }, wishes: { ...d.wishes, budget } };
+}
+
+function migrateDraft(d: ProjectDraft): ProjectDraft {
+  const geometry = d.geometry.openings
+    ? d.geometry
+    : { ...d.geometry, openings: d.geometry.source === 'demo' ? structuredClone(DEMO_PLAN.openings) : [] };
+  return { ...d, geometry, finishes: d.finishes ?? createFinishes(geometry) };
+}
 const isImage = (type?: string) => Boolean(type?.startsWith('image/'));
 
 export const useProjects = create<ProjectsState>()(
@@ -123,6 +146,19 @@ export const useProjects = create<ProjectsState>()(
     {
       // v2: изменилась модель (комнаты с контурами, коды стилей) — старые данные прототипа не переносим
       name: 'air-projects-v2',
+      version: 2,
+      migrate: (persisted, version) => {
+        const s = persisted as Pick<ProjectsState, 'projects' | 'draft' | 'draftStep' | 'editingProjectId'>;
+        if (version < 1) {
+          s.draft = migrateDraft(s.draft);
+          s.projects = s.projects.map((p) => ({ ...p, data: migrateDraft(p.data) }));
+        }
+        if (version < 2) {
+          s.draft = migrateSaleBudget(s.draft);
+          s.projects = s.projects.map((p) => ({ ...p, data: migrateSaleBudget(p.data) }));
+        }
+        return s;
+      },
       partialize: (s) => ({
         projects: s.projects,
         draft: s.draft,

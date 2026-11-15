@@ -7,6 +7,7 @@ export const WIZARD_STEPS = [
   { id: 'engineering', title: 'Инженерка', required: false },
   { id: 'occupants', title: 'Жильцы', required: true },
   { id: 'wishes', title: 'Пожелания', required: true },
+  { id: 'finishes', title: 'Отделка', required: false },
 ] as const;
 
 export type WizardStepId = (typeof WIZARD_STEPS)[number]['id'];

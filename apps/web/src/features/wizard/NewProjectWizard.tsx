@@ -7,6 +7,7 @@ import {
   isStepComplete,
   missingRequiredSteps,
   stepMissing,
+  type ProjectGoal,
   type WizardStepId,
 } from '@air/domain';
 import { PROPERTY_TYPE_LABELS } from '../../labels';
@@ -14,6 +15,7 @@ import { useProjects } from '../../store/projectsStore';
 import { CompletenessMeter } from './CompletenessMeter';
 import { DimensionsStep } from './steps/DimensionsStep';
 import { EngineeringStep } from './steps/EngineeringStep';
+import { FinishesStep } from './steps/FinishesStep';
 import { GoalStep } from './steps/GoalStep';
 import { OccupantsStep } from './steps/OccupantsStep';
 import { PlanStep } from './steps/PlanStep';
@@ -28,8 +30,17 @@ const STEP_VIEWS: Record<WizardStepId, { question: string; Component: ComponentT
   dimensions: { question: 'Проверьте план', Component: DimensionsStep },
   walls: { question: 'Какие стены можно менять?', Component: WallsStep },
   engineering: { question: 'Где стояки, вентканалы и газ?', Component: EngineeringStep },
-  occupants: { question: 'Кто будет жить?', Component: OccupantsStep },
+  occupants: { question: 'Кто будет жить?', Component: OccupantsStep }, // текст уточняется по цели ниже
   wishes: { question: 'Что хотите изменить?', Component: WishesStep },
+  finishes: { question: 'Какая отделка в каждой комнате?', Component: FinishesStep },
+};
+
+/** Шаг «Жильцы» для сдачи и продажи спрашивает не о жильцах. */
+const OCCUPANTS_QUESTION: Record<ProjectGoal, string> = {
+  live: 'Кто будет жить?',
+  rent_long: 'Кому будете сдавать?',
+  rent_daily: 'Кто будет останавливаться?',
+  sale: 'Кто ваш покупатель?',
 };
 
 const stepTitle = (id: WizardStepId) => WIZARD_STEPS.find((s) => s.id === id)?.title ?? id;
@@ -69,7 +80,8 @@ export function NewProjectWizard() {
   }, [current]);
 
   const step = WIZARD_STEPS[current] ?? WIZARD_STEPS[0];
-  const { question, Component } = STEP_VIEWS[step.id];
+  const { Component } = STEP_VIEWS[step.id];
+  const question = step.id === 'occupants' && draft.goal ? OCCUPANTS_QUESTION[draft.goal] : STEP_VIEWS[step.id].question;
   const missingHere = stepMissing(step.id, draft);
   const complete = missingHere.length === 0;
   const isLast = current === WIZARD_STEPS.length - 1;
@@ -128,18 +140,25 @@ export function NewProjectWizard() {
       )}
 
       <Card
+        // Длинный вопрос шага переносится на новую строку, а не обрезается многоточием (360 px)
+        styles={{ title: { whiteSpace: 'normal', overflow: 'visible' } }}
         title={
           <h2 id="step-title" ref={titleRef} tabIndex={-1} style={{ margin: 0, fontSize: 16, outline: 'none' }}>
             {question}
           </h2>
         }
-        extra={!step.required && <Typography.Text type="secondary">Можно пропустить</Typography.Text>}
+        extra={!step.required && !isMobile && <Typography.Text type="secondary">Можно пропустить</Typography.Text>}
       >
-        {/* Последний шаг («Пожелания») сам показывает все конфликты проекта */}
+        {/* Шаги «Пожелания» и «Отделка» сами показывают свои конфликты */}
         <Component />
       </Card>
 
-      <Flex justify="space-between" align="start" wrap gap={12}>
+      {/* На телефоне кнопки закреплены внизу экрана: длинные шаги не нужно проматывать до конца */}
+      <Flex justify="space-between" align="start" wrap gap={12}
+        style={isMobile ? {
+          position: 'sticky', bottom: 0, zIndex: 10, background: '#fff', padding: '10px 12px',
+          margin: '0 -12px', boxShadow: '0 -2px 8px rgba(0,0,0,0.08)',
+        } : undefined}>
         <Button disabled={current === 0} onClick={() => setCurrent(current - 1)}>Назад</Button>
         <Space orientation="vertical" align="end" size={4}>
           <Space wrap style={{ justifyContent: 'flex-end' }}>
@@ -172,15 +191,20 @@ export function NewProjectWizard() {
         closable={false}
         mask={{ closable: false }}
         footer={[
-          <Button key="new" onClick={() => { resetDraft(); setAskResume(false); }}>
-            {editingId ? 'Отменить редактирование' : 'Начать заново'}
-          </Button>,
+          <Popconfirm key="new"
+            title={editingId ? 'Отменить несохранённые правки?' : 'Удалить незаконченный проект?'}
+            description={editingId ? 'Сохранённая версия проекта не изменится.' : 'Введённые данные будут удалены.'}
+            okText="Да" cancelText="Нет" onConfirm={() => { resetDraft(); setAskResume(false); }}>
+            <Button>{editingId ? 'Отменить правки' : 'Начать заново'}</Button>
+          </Popconfirm>,
           <Button key="continue" type="primary" onClick={() => setAskResume(false)}>
             Продолжить
           </Button>,
         ]}
       >
-        Продолжить с шага «{step.title}» или начать новый проект с чистого листа?
+        {editingId
+          ? `Есть несохранённые правки проекта. Продолжить с шага «${step.title}» или отменить правки? Сохранённая версия проекта при отмене не изменится.`
+          : `Продолжить с шага «${step.title}» или начать новый проект с чистого листа?`}
       </Modal>
     </Space>
   );

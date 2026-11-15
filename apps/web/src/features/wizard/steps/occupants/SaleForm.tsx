@@ -1,17 +1,14 @@
-import { InputNumber } from 'antd';
+import { Typography } from 'antd';
 import type { SaleProfile } from '@air/domain';
 import { ChoiceCards } from '../../../../components/ChoiceCards';
 import { Field } from '../../../../components/Field';
 import { YesNo } from '../../../../components/YesNo';
+import { BUYER_LABELS } from '../../../../labels';
 import { useDraft } from '../../useDraft';
 
 type Buyer = NonNullable<SaleProfile['targetBuyer']>;
 
-const BUYERS: { value: Buyer; title: string }[] = [
-  { value: 'young_family', title: 'Молодая семья' },
-  { value: 'investor', title: 'Инвестор' },
-  { value: 'senior', title: 'Пенсионер' },
-];
+const BUYERS = (Object.keys(BUYER_LABELS) as Buyer[]).map((value) => ({ value, title: BUYER_LABELS[value] }));
 
 export function SaleForm() {
   const { draft, update } = useDraft();
@@ -24,13 +21,12 @@ export function SaleForm() {
         <ChoiceCards columns={3} labelledBy="buyer-label" value={s.targetBuyer} options={BUYERS}
           onChange={(v) => set((x) => void (x.targetBuyer = v))} />
       </Field>
-      <Field id="prep-budget" label="Бюджет на предпродажную подготовку" hint="косметика или перепланировка">
-        <InputNumber id="prep-budget" min={0} value={s.prepBudget} placeholder="Не знаю"
-          onChange={(v) => set((x) => void (x.prepBudget = v ?? undefined))} style={{ width: 200 }} />
-      </Field>
       <Field id="visuals" label="Нужны визуализации для объявления?" hint="набор «до/после» в нейтральном стиле">
         <YesNo labelledBy="visuals-label" value={s.needsListingVisuals} onChange={(v) => set((x) => void (x.needsListingVisuals = v))} />
       </Field>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        Бюджет на предпродажную подготовку укажете на шаге «Пожелания» — один раз, с валютой.
+      </Typography.Paragraph>
     </>
   );
 }

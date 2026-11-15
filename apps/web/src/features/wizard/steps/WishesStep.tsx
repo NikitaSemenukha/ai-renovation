@@ -3,30 +3,29 @@ import { fieldErrors, findConflicts, type InterventionLevel, type StyleCode, typ
 import { ChoiceCards } from '../../../components/ChoiceCards';
 import { Field } from '../../../components/Field';
 import { IssuesList } from '../../../components/IssuesList';
-import { INTERVENTION_LABELS, STYLE_LABELS, TIMEFRAME_LABELS, WISH_GOAL_LABELS } from '../../../labels';
+import { CURRENCIES, INTERVENTION_LABELS, STYLE_LABELS, TIMEFRAME_LABELS, WISH_GOAL_LABELS, defaultCurrency } from '../../../labels';
 import { useDraft } from '../useDraft';
 
 const GOALS = Object.keys(WISH_GOAL_LABELS) as WishGoal[];
 const LEVELS = Object.keys(INTERVENTION_LABELS) as InterventionLevel[];
 const STYLES = Object.keys(STYLE_LABELS) as StyleCode[];
 const TIMEFRAMES = Object.keys(TIMEFRAME_LABELS) as Timeframe[];
-const CURRENCIES = ['UAH', 'USD', 'EUR'];
 
 const toggle = <T,>(list: T[], item: T) => (list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
 /** 500000 → «500 000» */
 const formatMoney = (v?: string | number) => (v === undefined || v === '' ? '' : String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
 const parseMoney = (v?: string) => Number((v ?? '').replace(/\s/g, '')) || 0;
 
-function defaultCurrency(country?: string) {
-  const c = country?.trim().toLowerCase() ?? '';
-  return c.startsWith('укр') || c.startsWith('ukr') ? 'UAH' : 'USD';
-}
 
 export function WishesStep() {
   const { draft, update } = useDraft();
   const w = draft.wishes;
   const budgetError = fieldErrors(draft)['wishes.budget'];
-  const conflicts = findConflicts(draft);
+  const allConflicts = findConflicts(draft);
+  // Предупреждение о глубине изменений показываем прямо под выбором, а не внизу шага
+  const levelConflicts = allConflicts.filter((c) => c.id === 'level-too-shallow');
+  const conflicts = allConflicts.filter((c) => c.id !== 'level-too-shallow');
+  const isSale = draft.goal === 'sale';
 
   return (
     <>
@@ -34,6 +33,7 @@ export function WishesStep() {
         <ChoiceCards columns={3} labelledBy="intervention-label" value={w.interventionLevel}
           onChange={(v) => update((d) => void (d.wishes.interventionLevel = v))}
           options={LEVELS.map((v) => ({ value: v, ...INTERVENTION_LABELS[v] }))} />
+        {levelConflicts.length > 0 && <div style={{ marginTop: 10 }}><IssuesList conflicts={levelConflicts} /></div>}
       </Field>
 
       <Field id="wish-text" label="Что хотите получить" required hint="выберите хотя бы одну цель или опишите своими словами">
@@ -63,8 +63,8 @@ export function WishesStep() {
 
       <Field
         id="budget"
-        label="Бюджет ремонта"
-        hint={w.budget ? undefined : 'покажем варианты в разных ценовых уровнях'}
+        label={isSale ? 'Бюджет на предпродажную подготовку' : 'Бюджет ремонта'}
+        hint={w.budget ? undefined : isSale ? 'косметика или перепланировка — подберём под сумму' : 'покажем варианты в разных ценовых уровнях'}
         error={budgetError}
       >
         <Space orientation="vertical">
@@ -86,12 +86,12 @@ export function WishesStep() {
           {w.budget && (
             <Row gutter={[8, 8]}>
               <Col>
-                <InputNumber<number> aria-label="Бюджет от" min={0} value={w.budget.min} prefix="от" style={{ width: 170 }}
+                <InputNumber<number> aria-label="Бюджет от" min={0} inputMode="numeric" value={w.budget.min} prefix="от" style={{ width: 170 }}
                   formatter={formatMoney} parser={parseMoney} status={budgetError ? 'error' : undefined}
                   onChange={(v) => update((d) => void (d.wishes.budget && (d.wishes.budget.min = v ?? 0)))} />
               </Col>
               <Col>
-                <InputNumber<number> id="budget" aria-label="Бюджет до" min={0} value={w.budget.max} prefix="до" style={{ width: 170 }}
+                <InputNumber<number> id="budget" aria-label="Бюджет до" min={0} inputMode="numeric" value={w.budget.max} prefix="до" style={{ width: 170 }}
                   formatter={formatMoney} parser={parseMoney} status={budgetError ? 'error' : undefined}
                   onChange={(v) => update((d) => void (d.wishes.budget && (d.wishes.budget.max = v ?? 0)))} />
               </Col>

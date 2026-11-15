@@ -1,3 +1,4 @@
+import { finishViolations } from './finishes';
 import { roomAt, wallsBetween } from './geometry';
 import type { WizardStepId } from './steps';
 import type { ProjectDraft } from './types';
@@ -57,6 +58,13 @@ export function stepFieldErrors(step: WizardStepId, d: ProjectDraft): string[] {
   const all = fieldErrors(d);
   return (Object.keys(all) as FieldKey[]).filter((k) => FIELD_STEP[k] === step).map((k) => all[k] as string);
 }
+
+/** Цели, которые невозможны без изменения стен, — для понятного текста предупреждения. */
+const WALL_GOAL_NAMES = {
+  merge_kitchen: 'Объединить кухню с гостиной',
+  extra_bedroom: '+1 спальня',
+  second_bathroom: 'Второй санузел',
+} as const;
 
 // ---------- Конфликты планирования: не блокируют, но предупреждают ----------
 
@@ -125,13 +133,24 @@ export function findConflicts(d: ProjectDraft): Conflict[] {
     }
   }
 
-  const needsWalls = d.wishes.goals.some((x) => x === 'merge_kitchen' || x === 'extra_bedroom' || x === 'second_bathroom');
-  if (d.wishes.interventionLevel === 'design_only' && needsWalls) {
+  if (wantsMerge && gasPoints.length === 0 && d.engineering.length === 0) {
+    out.push({
+      id: 'merge-gas-unknown',
+      severity: 'warning',
+      step: 'engineering',
+      message:
+        'Инженерные точки не отмечены. Если на кухне газ, открытое объединение кухни с гостиной обычно запрещено — отметьте газ на шаге «Инженерка» или уточните у управляющей компании.',
+    });
+  }
+
+  const wallGoals = d.wishes.goals.filter((x) => x in WALL_GOAL_NAMES);
+  if (d.wishes.interventionLevel === 'design_only' && wallGoals.length > 0) {
+    const names = wallGoals.map((x) => `«${WALL_GOAL_NAMES[x as keyof typeof WALL_GOAL_NAMES]}»`).join(', ');
     out.push({
       id: 'level-too-shallow',
       severity: 'warning',
       step: 'wishes',
-      message: 'Выбрано «Только дизайн», но некоторые цели требуют изменения стен. Выберите «Перегородки» или уберите эти цели.',
+      message: `Выбрано «Только дизайн», но ${wallGoals.length > 1 ? 'цели' : 'цель'} ${names} ${wallGoals.length > 1 ? 'требуют' : 'требует'} изменения стен. Выберите «Перегородки» или уберите ${wallGoals.length > 1 ? 'эти цели' : 'эту цель'}.`,
     });
   }
 
@@ -141,6 +160,15 @@ export function findConflicts(d: ProjectDraft): Conflict[] {
       severity: 'warning',
       step: 'engineering',
       message: 'Для второго санузла важно расположение стояков — отметьте их, иначе вариант нельзя проверить.',
+    });
+  }
+
+  for (const v of finishViolations(d.finishes, { geometry: g, styles: d.wishes.styles })) {
+    out.push({
+      id: `finish-${v.roomId}-${v.message}`,
+      severity: 'warning',
+      step: 'finishes',
+      message: `Отделка, «${v.roomName}»: ${v.message}.`,
     });
   }
 

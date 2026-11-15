@@ -21,4 +21,8 @@ export const TEST_PLAN: PlanGeometry = {
     { id: 'living', name: 'Гостиная', kind: 'living', position: { x: 1750, y: 4750 }, polygon: rect(0, 3000, 3500, 6500) },
     { id: 'bedroom', name: 'Спальня', kind: 'bedroom', position: { x: 6000, y: 3250 }, polygon: rect(3500, 0, 9000, 6500) },
   ],
+  openings: [
+    { id: 'win-kitchen', kind: 'window', wallId: 'ext-n', offsetMm: 1000, widthMm: 1400 },
+    { id: 'door-bedroom', kind: 'door', wallId: 'core', offsetMm: 4000, widthMm: 800 },
+  ],
 };

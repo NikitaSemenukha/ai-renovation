@@ -79,4 +79,20 @@ describe('findConflicts', () => {
     d.wishes = { ...d.wishes, goals: ['extra_bedroom'], interventionLevel: 'design_only' };
     expect(ids(d)).toContain('level-too-shallow');
   });
+
+  it('«Только дизайн» называет конкретные цели, которым нужны стены', () => {
+    const d = draft();
+    d.wishes = { ...d.wishes, goals: ['extra_bedroom', 'second_bathroom', 'workspace'], interventionLevel: 'design_only' };
+    const msg = findConflicts(d).find((c) => c.id === 'level-too-shallow')?.message ?? '';
+    expect(msg).toContain('«+1 спальня», «Второй санузел»');
+    expect(msg).not.toContain('Рабоч');
+  });
+
+  it('объединение кухни без отмеченной инженерки предупреждает о возможном газе', () => {
+    const d = draft();
+    d.wishes.goals = ['merge_kitchen'];
+    expect(ids(d)).toContain('merge-gas-unknown');
+    d.engineering = [{ id: 'r', type: 'riser', position: { x: 500, y: 500 } }];
+    expect(ids(d)).not.toContain('merge-gas-unknown');
+  });
 });
