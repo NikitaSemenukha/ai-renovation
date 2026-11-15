@@ -145,7 +145,9 @@ export const useProjects = create<ProjectsState>()(
             projects: s.projects.map((p) => {
               if (p.id !== projectId) return p;
               const prev = p.designs?.[design.roomId] ?? [];
-              return { ...p, designs: { ...p.designs, [design.roomId]: [design, ...prev].slice(0, MAX_DESIGNS_PER_ROOM) } };
+              // Номер варианта по порядку создания: «Вариант 4» остаётся четвёртым и после новых генераций
+              const seq = Math.max(0, ...prev.map((x) => x.seq ?? 0), prev.length) + 1;
+              return { ...p, designs: { ...p.designs, [design.roomId]: [{ ...design, seq }, ...prev].slice(0, MAX_DESIGNS_PER_ROOM) } };
             }),
           }));
         },

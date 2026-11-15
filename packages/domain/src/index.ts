@@ -5,3 +5,4 @@ export * from './issues';
 export * from './wizard';
 export * from './finishes';
 export * from './design';
+export * from './catalog';

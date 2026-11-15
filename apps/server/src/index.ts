@@ -3,8 +3,9 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
-import type { ProjectDraft } from '@air/domain';
-import { DESIGN_MODEL, DesignError, designRoom } from './designer';
+import { designZones, type ProjectDraft } from '@air/domain';
+import { loadCatalog } from './catalog';
+import { DESIGN_MODEL, DesignError, designZone } from './designer';
 
 /**
  * API прототипа. Сейчас один эндпоинт — дизайн комнаты от ИИ.
@@ -57,6 +58,12 @@ const app = new Hono();
 
 app.get('/api/health', (c) => c.json({ ok: true, ai: hasKey ? 'configured' : 'missing_key', model: DESIGN_MODEL }));
 
+/** Каталог для витрины: названия, цены, ссылки на товары из дизайна. */
+app.get('/api/catalog', (c) => {
+  const catalog = loadCatalog();
+  return catalog ? c.json(catalog) : c.json({ error: 'Каталог не загружен' }, 404);
+});
+
 app.post('/api/design/room', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
   if (!hasKey) {
     return c.json({ error: 'ИИ не настроен: добавьте ANTHROPIC_API_KEY в apps/server/.env и перезапустите сервер.' }, 503);
@@ -67,12 +74,19 @@ app.post('/api/design/room', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
   const parsed = RequestSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'Некорректные данные проекта' }, 400);
   const draft = parsed.data.draft as unknown as ProjectDraft;
-  const room = draft.geometry.rooms.find((r) => r.id === parsed.data.roomId);
-  if (!room) return c.json({ error: 'Комната не найдена в плане' }, 400);
+  // roomId — id комнаты или объединённой зоны (например, кухни-гостиной)
+  const zone = designZones(draft).find((z) => z.id === parsed.data.roomId);
+  if (!zone) return c.json({ error: 'Комната не найдена в плане' }, 400);
+  if (zone.blockedReason) return c.json({ error: `Эту зону нельзя спроектировать: ${zone.blockedReason}` }, 400);
 
   try {
-    return c.json(await designRoom(getClient(), draft, room));
+    return c.json(await designZone(getClient(), draft, zone, loadCatalog(), c.req.raw.signal));
   } catch (err) {
+    if (err instanceof Anthropic.APIUserAbortError || c.req.raw.signal.aborted) {
+      console.info(`[design] zone=${zone.id} отменено клиентом`);
+      // Ответ клиент уже не ждёт; 499 — «клиент закрыл запрос»
+      return new Response(null, { status: 499 });
+    }
     if (err instanceof DesignError) return c.json({ error: err.message }, err.status);
     if (err instanceof Anthropic.AuthenticationError) {
       console.error('[design] invalid API key');

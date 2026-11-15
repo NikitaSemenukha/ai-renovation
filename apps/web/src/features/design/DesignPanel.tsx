@@ -1,113 +1,171 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { BulbOutlined, EditOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Empty, Flex, List, Segmented, Space, Spin, Switch, Tag, Typography } from 'antd';
-import { briefHash, buildRoomBrief, isRoomFinished, type Project } from '@air/domain';
+import { AimOutlined, BulbOutlined, EditOutlined, ReloadOutlined, ShoppingOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Card, Empty, Flex, Grid, List, Segmented, Select, Space, Spin, Switch, Tag, Typography } from 'antd';
+import {
+  briefHash,
+  buildZoneBrief,
+  designCost,
+  designZones,
+  isRoomFinished,
+  type Catalog,
+  type Project,
+  type RoomDesign,
+} from '@air/domain';
 import { useProjects } from '../../store/projectsStore';
-import { DesignRequestError, fetchAiStatus, requestRoomDesign, type AiStatus } from './api';
+import { DesignRequestError, fetchAiStatus, fetchCatalog, requestRoomDesign, type AiStatus } from './api';
 
 // three.js тяжёлый — грузим его только когда есть что показать
 const RoomScene3D = lazy(() => import('./RoomScene3D'));
 
-const CUTAWAY_MM = 1200;
+const LOW_WALLS_MM = 1200;
+const money = (n: number) => n.toLocaleString('ru-RU');
+
+/** Номер варианта по порядку создания и время — не сдвигаются при новых генерациях. */
+function variantLabel(d: RoomDesign, index: number, total: number): string {
+  const n = d.seq ?? total - index;
+  const time = new Date(d.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return `Вариант ${n} · ${time}`;
+}
 
 export function DesignPanel({ project, onEdit }: { project: Project; onEdit: () => void }) {
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const mobile = !screens.md;
   const addRoomDesign = useProjects((s) => s.addRoomDesign);
   const d = project.data;
-  const rooms = d.geometry.rooms;
-  const [roomId, setRoomId] = useState(rooms[0]?.id);
+  const zones = useMemo(() => designZones(d), [d]);
+  const [zoneId, setZoneId] = useState(zones[0]?.id);
   const [variant, setVariant] = useState(0);
-  const [fullWalls, setFullWalls] = useState(false);
+  const [lowWalls, setLowWalls] = useState(false);
+  const [resetSignal, setResetSignal] = useState(0);
   const [ai, setAi] = useState<AiStatus>();
-  const [loading, setLoading] = useState(false);
+  const [catalog, setCatalog] = useState<Catalog>();
+  // Генерация привязана к зоне, для которой её запустили: переключение вкладок её не путает
+  const [loadingZone, setLoadingZone] = useState<string>();
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string>();
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     void fetchAiStatus().then(setAi);
+    void fetchCatalog().then(setCatalog);
     return () => abortRef.current?.abort();
   }, []);
 
   useEffect(() => {
-    if (!loading) return;
+    if (!loadingZone) return;
     const started = Date.now();
     const t = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
     return () => clearInterval(t);
-  }, [loading]);
+  }, [loadingZone]);
 
-  const room = rooms.find((r) => r.id === roomId) ?? rooms[0];
-  const brief = useMemo(() => (room ? buildRoomBrief(d, room) : undefined), [d, room]);
-  if (!room || !brief) return null;
+  // Свежесть дизайна каждой зоны — для отметок во вкладках
+  const hashes = useMemo(() => new Map(zones.filter((z) => !z.blockedReason).map((z) => [z.id, briefHash(buildZoneBrief(d, z))])), [d, zones]);
+  const zoneMark = (id: string) => {
+    const latest = project.designs?.[id]?.[0];
+    if (!latest) return '';
+    return latest.inputsHash === hashes.get(id) ? ' ✓' : ' ↻';
+  };
 
-  const designs = project.designs?.[room.id] ?? [];
+  const zone = zones.find((z) => z.id === zoneId) ?? zones[0];
+  const brief = useMemo(() => (zone && !zone.blockedReason ? buildZoneBrief(d, zone) : undefined), [d, zone]);
+  if (!zone) return null;
+
+  const designs = project.designs?.[zone.id] ?? [];
   const current = designs[Math.min(variant, designs.length - 1)];
-  const stale = current ? current.inputsHash !== briefHash(brief) : false;
-  const finished = isRoomFinished(room, d.finishes, { geometry: d.geometry, styles: d.wishes.styles });
-  const canGenerate = ai === 'configured' && !loading;
+  const stale = current && brief ? current.inputsHash !== briefHash(brief) : false;
+  const ctx = { geometry: d.geometry, styles: d.wishes.styles };
+  const finished = zone.mergedFrom
+    ? d.geometry.rooms.filter((r) => r.kind === 'kitchen' || r.kind === 'living').every((r) => isRoomFinished(r, d.finishes, ctx))
+    : isRoomFinished(zone.room, d.finishes, ctx);
+  const loadingHere = loadingZone === zone.id;
+  const canGenerate = ai === 'configured' && !loadingZone && !zone.blockedReason;
+  const productsById = new Map((catalog?.products ?? []).map((p) => [p.id, p]));
+  const cost = current ? designCost(current.items, catalog) : undefined;
+  const usesDemo = current?.items.some((it) => it.productId && productsById.get(it.productId)?.demo);
+
+  const selectZone = (id: string) => {
+    setZoneId(id);
+    setVariant(0);
+    setError(undefined);
+  };
 
   const generate = async () => {
+    const target = zone;
     setError(undefined);
-    setLoading(true);
+    setLoadingZone(target.id);
     setElapsed(0);
     abortRef.current = new AbortController();
     try {
-      const design = await requestRoomDesign(d, room.id, abortRef.current.signal);
+      const design = await requestRoomDesign(d, target.id, abortRef.current.signal);
       addRoomDesign(project.id, design);
-      setVariant(0);
-      if (design.unresolved.length) message.warning('Дизайн готов, но часть замечаний проверки осталась — см. ниже');
-      else message.success(`Дизайн комнаты «${room.name}» готов`);
+      if (zoneId === target.id || !zoneId) setVariant(0);
+      if (design.unresolved.length) message.warning(`Дизайн «${target.name}» готов, но часть замечаний проверки осталась`);
+      else message.success(`Дизайн «${target.name}» готов`);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof DesignRequestError ? err.message : 'Не удалось получить дизайн');
     } finally {
-      setLoading(false);
+      setLoadingZone(undefined);
     }
   };
+
+  const zoneOptions = zones.map((z) => ({ value: z.id, label: `${z.name}${zoneMark(z.id)}` }));
 
   return (
     <Card
       title={<span><BulbOutlined /> Дизайн от ИИ</span>}
-      extra={<Typography.Text type="secondary">Claude проектирует, программа проверяет</Typography.Text>}
+      extra={!mobile && <Typography.Text type="secondary">Claude проектирует, программа проверяет</Typography.Text>}
+      styles={mobile ? { body: { padding: 12 } } : undefined}
     >
       <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        {ai === 'offline' && (
-          <Alert type="warning" showIcon title="Сервер ИИ не запущен"
-            description="Запустите его в отдельном терминале: npm run dev:server" />
-        )}
-        {ai === 'missing_key' && (
-          <Alert type="warning" showIcon title="ИИ не настроен"
-            description="Добавьте ANTHROPIC_API_KEY в файл apps/server/.env (образец — .env.example) и перезапустите сервер." />
-        )}
+        {ai === 'offline' && <Alert type="warning" showIcon title="Сервис дизайна сейчас недоступен" description="Попробуйте обновить страницу чуть позже." />}
+        {ai === 'missing_key' && <Alert type="warning" showIcon title="Дизайн от ИИ пока не подключён" description="Обратитесь к администратору сервиса." />}
 
-        <Segmented block value={room.id} onChange={(v) => { setRoomId(v); setVariant(0); setError(undefined); }}
-          options={rooms.map((r) => ({ value: r.id, label: `${r.name}${project.designs?.[r.id]?.length ? ' ✓' : ''}` }))} />
+        {/* На телефоне вкладки не помещаются — выбор зоны списком */}
+        {mobile ? (
+          <Select size="large" style={{ width: '100%' }} value={zone.id} onChange={selectZone} options={zoneOptions} aria-label="Комната" />
+        ) : (
+          <Segmented block value={zone.id} onChange={selectZone} options={zoneOptions} />
+        )}
+        <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: -8 }}>
+          ✓ — дизайн актуален, ↻ — отделка изменилась, стоит сгенерировать заново
+        </Typography.Text>
 
-        {!finished && (
-          <Alert type="info" showIcon title="Отделка комнаты выбрана не полностью"
+        {zone.blockedReason && (
+          <Alert type="error" showIcon title={`«${zone.name}» нельзя спроектировать`} description={`Причина: ${zone.blockedReason}.`} />
+        )}
+        {zone.mergedFrom && !zone.blockedReason && (
+          <Alert type="info" showIcon title="Кухня и гостиная проектируются как одна зона"
+            description="Перегородка между ними убрана, ИИ разделит пространство на кухонную и гостиную части. Снос возможен только после проверки стены и согласования перепланировки." />
+        )}
+        {!finished && !zone.blockedReason && (
+          <Alert type="info" showIcon title="Отделка выбрана не полностью"
             description="ИИ подберёт недостающее сам, но точнее всего дизайн получается по полностью выбранной отделке."
-            action={<Button size="small" icon={<EditOutlined />} onClick={onEdit}>Выбрать отделку</Button>} />
+            action={<Button size="small" icon={<EditOutlined />} onClick={onEdit}>Выбрать</Button>} />
         )}
 
         <Flex gap={8} wrap align="center">
-          <Button type="primary" icon={current ? <ReloadOutlined /> : <BulbOutlined />} loading={loading} disabled={!canGenerate}
-            onClick={() => void generate()}>
+          <Button type="primary" size={mobile ? 'large' : 'middle'} block={mobile} icon={current ? <ReloadOutlined /> : <BulbOutlined />}
+            loading={loadingHere} disabled={!canGenerate} onClick={() => void generate()}>
             {current ? 'Ещё вариант' : 'Сгенерировать дизайн'}
           </Button>
-          {loading && (
+          {loadingZone && (
             <>
-              <Typography.Text type="secondary">Claude проектирует комнату… {elapsed} с (обычно 1–2 минуты)</Typography.Text>
+              <Typography.Text type="secondary">
+                {loadingHere ? 'Claude проектирует…' : `Идёт дизайн «${zones.find((z) => z.id === loadingZone)?.name}»…`} {elapsed} с ({zones.find((z) => z.id === loadingZone)?.mergedFrom ? 'большая зона — до 3 минут' : 'обычно 30–70 с'})
+              </Typography.Text>
               <Button size="small" onClick={() => abortRef.current?.abort()}>Отменить</Button>
             </>
           )}
-          {!loading && <Typography.Text type="secondary" style={{ fontSize: 12 }}>Каждая генерация — платный запрос к Claude</Typography.Text>}
+          {!loadingZone && <Typography.Text type="secondary" style={{ fontSize: 12 }}>Каждая генерация — платный запрос к ИИ</Typography.Text>}
         </Flex>
 
         {error && <Alert type="error" showIcon title={error} closable={{ onClose: () => setError(undefined) }} />}
 
-        {!current && !loading && <Empty description="Для этой комнаты дизайна ещё нет" />}
+        {!current && !loadingHere && !zone.blockedReason && <Empty description="Для этой зоны дизайна ещё нет" />}
 
-        {current && (
+        {current && brief && (
           <>
             {stale && (
               <Alert type="warning" showIcon title="Отделка или план изменились после генерации"
@@ -115,21 +173,28 @@ export function DesignPanel({ project, onEdit }: { project: Project; onEdit: () 
             )}
             <Flex justify="space-between" align="center" wrap gap={8}>
               {designs.length > 1 ? (
-                <Segmented size="small" value={variant} onChange={setVariant}
-                  options={designs.map((_, i) => ({ value: i, label: `Вариант ${i + 1}` }))} />
-              ) : <span />}
-              <Space>
-                <Typography.Text style={{ fontSize: 12 }}>Стены в полную высоту</Typography.Text>
-                <Switch size="small" checked={fullWalls} onChange={setFullWalls} />
+                <Select size="small" value={variant} onChange={setVariant} style={{ minWidth: 190 }}
+                  options={designs.map((x, i) => ({ value: i, label: variantLabel(x, i, designs.length) }))} />
+              ) : (
+                <Typography.Text type="secondary">{variantLabel(current, 0, 1)}</Typography.Text>
+              )}
+              <Space wrap>
+                <Button size="small" icon={<AimOutlined />} onClick={() => setResetSignal((n) => n + 1)}>Вернуть вид</Button>
+                <Space size={6}>
+                  <Typography.Text style={{ fontSize: 12 }}>Низкие стены</Typography.Text>
+                  <Switch size="small" checked={lowWalls} onChange={setLowWalls} />
+                </Space>
               </Space>
             </Flex>
 
-            <Suspense fallback={<Flex justify="center" align="center" style={{ height: 420 }}><Spin /></Flex>}>
-              <RoomScene3D brief={brief} design={current} wallHeightMm={fullWalls ? brief.ceilingHeightMm : CUTAWAY_MM} />
+            <Suspense fallback={<Flex justify="center" align="center" style={{ height: 440 }}><Spin /></Flex>}>
+              {/* key: при смене зоны или варианта камера встаёт в исходный вид */}
+              <RoomScene3D key={`${zone.id}-${current.createdAt}`} brief={brief} design={current}
+                wallHeightMm={lowWalls ? LOW_WALLS_MM : brief.ceilingHeightMm} resetSignal={resetSignal} height={mobile ? 320 : 440} />
             </Suspense>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Схематичная 3D-модель: мебель показана блоками в реальных размерах и цветах. Вращайте мышью или пальцем, наведите на
-              предмет — увидите подпись. Синие трубы — стояки, к ним оставлен доступ.
+              Вращайте мышью или пальцем, колёсиком или щипком — приближение. Наведите на предмет — увидите подпись. Синие трубы — стояки.
+              Модели упрощённые, размеры и цвета — реальные.
             </Typography.Text>
 
             <Typography.Paragraph style={{ marginBottom: 0 }}>{current.concept}</Typography.Paragraph>
@@ -144,19 +209,35 @@ export function DesignPanel({ project, onEdit }: { project: Project; onEdit: () 
             </Space>
 
             <List size="small" bordered dataSource={current.items}
-              renderItem={(it) => (
-                <List.Item>
-                  <Flex justify="space-between" style={{ width: '100%' }} gap={8}>
-                    <span>
-                      <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: it.color, marginRight: 8 }} />
-                      {it.label}
-                    </span>
-                    <Typography.Text type="secondary" style={{ whiteSpace: 'nowrap' }}>
-                      {Math.round(it.widthMm)}×{Math.round(it.depthMm)}×{Math.round(it.heightMm)} мм
-                    </Typography.Text>
-                  </Flex>
-                </List.Item>
-              )} />
+              renderItem={(it) => {
+                const prod = it.productId ? productsById.get(it.productId) : undefined;
+                return (
+                  <List.Item>
+                    <Flex justify="space-between" style={{ width: '100%' }} gap={8} wrap>
+                      <span>
+                        <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: it.color, marginRight: 8 }} />
+                        {prod?.url ? <a href={prod.url} target="_blank" rel="noreferrer">{it.label}</a> : it.label}
+                        {prod && <Tag icon={<ShoppingOutlined />} color={prod.demo ? 'default' : 'blue'} style={{ marginLeft: 8 }}>{prod.demo ? 'демо-товар' : prod.supplier}</Tag>}
+                      </span>
+                      <Typography.Text type="secondary" style={{ whiteSpace: 'nowrap' }}>
+                        {Math.round(it.widthMm)}×{Math.round(it.depthMm)}×{Math.round(it.heightMm)} мм
+                        {prod?.priceUah !== undefined && ` · ${money(prod.priceUah)} ₴`}
+                      </Typography.Text>
+                    </Flex>
+                  </List.Item>
+                );
+              }} />
+
+            {cost && cost.priced > 0 && (
+              <Typography.Text strong>
+                Товары из каталога: {money(cost.totalUah)} ₴{cost.unpriced > 0 && ` + ещё ${cost.unpriced} предм. без цены`}
+              </Typography.Text>
+            )}
+            {usesDemo && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Сейчас подключён демо-каталог: обезличенные товары с типовыми размерами, без цен. После подключения фида поставщика здесь будут реальные товары, цены и ссылки.
+              </Typography.Text>
+            )}
 
             {current.notes.length > 0 && (
               <Alert type="info" showIcon title="Советы дизайнера"
@@ -166,9 +247,6 @@ export function DesignPanel({ project, onEdit }: { project: Project; onEdit: () 
               <Alert type="warning" showIcon title="Проверка нашла замечания, которые ИИ не исправил"
                 description={<ul style={{ margin: 0, paddingLeft: 18 }}>{current.unresolved.map((n, i) => <li key={i}>{n}</li>)}</ul>} />
             )}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {current.model} · {new Date(current.createdAt).toLocaleString('ru-RU')}
-            </Typography.Text>
           </>
         )}
       </Space>

@@ -1,5 +1,5 @@
 import { roomFinishesOf, roomHasWindow, roomNeedsDoor } from './finishes';
-import { pointInPolygon, roomAt } from './geometry';
+import { pointInPolygon, roomAt, wallsBetween } from './geometry';
 import type {
   EngineeringPointType,
   FurnitureItem,
@@ -48,6 +48,8 @@ export interface DesignItem {
   color: string;
   material: string;
   mount: ItemMount;
+  /** Товар из каталога поставщика; размеры и цвет тогда берутся из каталога. */
+  productId?: string;
 }
 
 export interface DesignLight {
@@ -73,6 +75,8 @@ export interface RoomDesign extends RoomDesignProposal {
   model: string;
   /** Замечания проверки, которые не удалось исправить автоматически. */
   unresolved: string[];
+  /** Порядковый номер варианта в комнате (1, 2, 3…) — не меняется при новых генерациях. */
+  seq?: number;
 }
 
 // ---------- Система координат комнаты ----------
@@ -121,6 +125,8 @@ export interface RoomBrief {
   wishes: { goals: string[]; text: string; budget?: ProjectDraft['wishes']['budget'] };
   needsDoor: boolean;
   hasWindow: boolean;
+  /** Для объединённой зоны: из каких комнат она собрана и их отделка. */
+  mergedFrom?: { name: string; kind: Room['kind']; finishes: RoomFinishes }[];
 }
 
 function polygonArea(poly: Point[]): number {
@@ -153,10 +159,23 @@ function openingForRoom(g: PlanGeometry, o: Opening, room: Room): { a: Point; b:
   return null;
 }
 
-export function buildRoomBrief(d: ProjectDraft, room: Room): RoomBrief {
-  const g = d.geometry;
+export interface BriefOverrides {
+  geometry?: PlanGeometry;
+  finishes?: RoomFinishes;
+  mergedFrom?: RoomBrief['mergedFrom'];
+}
+
+/** Мойка — отдельная точка внутри кухонного гарнитура: так проверяется расстояние до стояка. */
+function requiredFor(f: RoomFinishes): RoomBrief['requiredItems'] {
+  const req: RoomBrief['requiredItems'] = [...f.furniture, ...f.plumbing];
+  if (f.furniture.includes('kitchen_set') && !req.includes('sink')) req.push('sink');
+  return req;
+}
+
+export function buildRoomBrief(d: ProjectDraft, room: Room, over: BriefOverrides = {}): RoomBrief {
+  const g = over.geometry ?? d.geometry;
   const frame = roomFrame(room);
-  const f = roomFinishesOf(d.finishes, room);
+  const f = over.finishes ?? roomFinishesOf(d.finishes, room);
   const openings: BriefOpening[] = [];
   for (const o of g.openings) {
     const r = openingForRoom(g, o, room);
@@ -181,13 +200,14 @@ export function buildRoomBrief(d: ProjectDraft, room: Room): RoomBrief {
     finishes: f,
     socketColor: d.finishes.socketColor,
     fixtureColor: d.finishes.fixtureColor,
-    requiredItems: [...f.furniture, ...f.plumbing],
+    requiredItems: requiredFor(f),
     styles: d.wishes.styles,
     goal: d.goal,
     occupants,
     wishes: { goals: d.wishes.goals, text: d.wishes.text.trim(), budget: d.wishes.budget },
     needsDoor: roomNeedsDoor(g, room),
     hasWindow: roomHasWindow(g, room),
+    ...(over.mergedFrom ? { mergedFrom: over.mergedFrom } : {}),
   };
 }
 
@@ -236,6 +256,26 @@ const isObstacle = (it: DesignItem) => it.mount === 'floor' && it.kind !== 'rug'
 const WINDOW_SILL_MM = 900;
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const NEEDS_CLEARANCE: EngineeringPointType[] = ['riser', 'vent', 'gas', 'electrical_panel'];
+const BUILT_INTO_KITCHEN: DesignItemKind[] = ['sink', 'stove'];
+
+/**
+ * Насколько далеко мокрая точка может стоять от стояка, мм. ГИПОТЕЗА: канализация самотёчная,
+ * длинная трасса требует уклона и подъёма пола; унитазу нужен короткий отвод большого диаметра.
+ * Уточняется с сантехником.
+ */
+export const MAX_DISTANCE_TO_RISER_MM: Partial<Record<DesignItemKind, number>> = {
+  toilet: 1500,
+  sink: 3000,
+  shower: 3000,
+  bathtub: 3000,
+  washer: 3000,
+};
+
+function distanceToRect(pt: Point, r: Rect): number {
+  const dx = Math.max(r.x1 - pt.x, 0, pt.x - r.x2);
+  const dy = Math.max(r.y1 - pt.y, 0, pt.y - r.y2);
+  return Math.hypot(dx, dy);
+}
 
 /**
  * Замечания к предложенному дизайну — на русском, чтобы их можно было показать
@@ -267,11 +307,14 @@ export function validateRoomDesign(p: RoomDesignProposal, brief: RoomBrief): str
   }
 
   const obstacles = p.items.filter(isObstacle);
+  // Мойка и варочная панель могут стоять внутри кухонного гарнитура — это не пересечение
+  const builtIn = (a: DesignItem, b: DesignItem) =>
+    (a.kind === 'kitchen_set' && BUILT_INTO_KITCHEN.includes(b.kind)) || (b.kind === 'kitchen_set' && BUILT_INTO_KITCHEN.includes(a.kind));
   for (let i = 0; i < obstacles.length; i++) {
     for (let j = i + 1; j < obstacles.length; j++) {
       const a = obstacles[i];
       const b = obstacles[j];
-      if (a && b && overlap(itemFootprint(a), itemFootprint(b), 50)) issues.push(`${label(a)} и ${label(b)} пересекаются`);
+      if (a && b && !builtIn(a, b) && overlap(itemFootprint(a), itemFootprint(b), 50)) issues.push(`${label(a)} и ${label(b)} пересекаются`);
     }
   }
 
@@ -290,6 +333,18 @@ export function validateRoomDesign(p: RoomDesignProposal, brief: RoomBrief): str
       const pad = 100;
       if (e.at.x > r.x1 - pad && e.at.x < r.x2 + pad && e.at.y > r.y1 - pad && e.at.y < r.y2 + pad) {
         issues.push(`${label(it)} перекрывает инженерную точку (${e.type}) — к ней нужен доступ`);
+      }
+    }
+  }
+
+  const risers = brief.engineering.filter((e) => e.type === 'riser');
+  if (risers.length) {
+    for (const it of p.items) {
+      const limit = MAX_DISTANCE_TO_RISER_MM[it.kind];
+      if (!limit) continue;
+      const dist = Math.min(...risers.map((r) => distanceToRect(r.at, itemFootprint(it))));
+      if (dist > limit) {
+        issues.push(`${label(it)} в ${(dist / 1000).toFixed(1)} м от стояка — для ${it.kind} не дальше ${(limit / 1000).toFixed(1)} м, иначе нужна длинная канализация с уклоном`);
       }
     }
   }
@@ -313,3 +368,142 @@ export function validateRoomDesign(p: RoomDesignProposal, brief: RoomBrief): str
 
   return [...new Set(issues)];
 }
+
+// ---------- Тексты ответа модели ----------
+
+const LATIN_TO_CYRILLIC: Record<string, string> = {
+  a: 'а', e: 'е', o: 'о', p: 'р', c: 'с', x: 'х', y: 'у', k: 'к', m: 'м', t: 'т', h: 'н', b: 'в',
+  A: 'А', E: 'Е', O: 'О', P: 'Р', C: 'С', X: 'Х', K: 'К', M: 'М', T: 'Т', H: 'Н', B: 'В',
+};
+
+/**
+ * Чистит текст для клиента: убирает служебные координаты вида «(3040; 1100)» и
+ * латинские буквы, случайно попавшие в русские слова («уклонom» → «уклоном»).
+ */
+export function sanitizeDesignText(text: string): string {
+  return text
+    .replace(/\s*\(\s*-?\d{2,6}\s*[;,]\s*-?\d{2,6}\s*\)/g, '')
+    .replace(/[A-Za-zА-Яа-яЁёІіЇїЄєҐґ]+/g, (word) => {
+      const cyr = (word.match(/[А-Яа-яЁёІіЇїЄєҐґ]/g) ?? []).length;
+      if (cyr < 2 || cyr === word.length) return word;
+      return word.replace(/[A-Za-z]/g, (ch) => LATIN_TO_CYRILLIC[ch] ?? ch);
+    })
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+export function sanitizeProposal(p: RoomDesignProposal): RoomDesignProposal {
+  return {
+    ...p,
+    concept: sanitizeDesignText(p.concept),
+    notes: p.notes.map(sanitizeDesignText).filter(Boolean),
+    items: p.items.map((it) => ({ ...it, label: sanitizeDesignText(it.label), material: sanitizeDesignText(it.material) })),
+  };
+}
+
+// ---------- Зоны дизайна: комнаты и объединённая кухня-гостиная ----------
+
+export interface DesignZone {
+  id: string;
+  name: string;
+  room: Room;
+  /** Геометрия, в которой проектируется зона (для объединения — без перегородки). */
+  geometry: PlanGeometry;
+  finishes?: RoomFinishes;
+  mergedFrom?: RoomBrief['mergedFrom'];
+  /** Почему зону нельзя спроектировать — показывается вместо кнопки. */
+  blockedReason?: string;
+}
+
+export const MERGED_KITCHEN_ZONE_ID = 'merge:kitchen+living';
+
+const isAxisRect = (poly: Point[]) =>
+  poly.length === 4 && poly.every((p, i) => {
+    const q = poly[(i + 1) % 4];
+    return q !== undefined && (p.x === q.x || p.y === q.y);
+  });
+
+/** Объединение двух прямоугольников, если вместе они образуют прямоугольник. */
+function rectUnion(a: Point[], b: Point[]): Point[] | undefined {
+  if (!isAxisRect(a) || !isAxisRect(b)) return undefined;
+  const all = [...a, ...b];
+  const x1 = Math.min(...all.map((p) => p.x));
+  const x2 = Math.max(...all.map((p) => p.x));
+  const y1 = Math.min(...all.map((p) => p.y));
+  const y2 = Math.max(...all.map((p) => p.y));
+  const area = (poly: Point[]) => {
+    const xs = poly.map((p) => p.x);
+    const ys = poly.map((p) => p.y);
+    return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+  };
+  if (area(a) + area(b) !== (x2 - x1) * (y2 - y1)) return undefined;
+  return [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }];
+}
+
+/**
+ * Что можно проектировать: каждая комната, а при пожелании «объединить кухню с гостиной» —
+ * ещё и общая зона. Объединение проверяется по тем же правилам, что и в конфликтах:
+ * несущую стену не сносим, газифицированную кухню открыто не объединяем.
+ */
+export function designZones(d: ProjectDraft): DesignZone[] {
+  const g = d.geometry;
+  const zones: DesignZone[] = g.rooms.map((room) => ({ id: room.id, name: room.name, room, geometry: g }));
+  if (!d.wishes.goals.includes('merge_kitchen')) return zones;
+  const kitchen = g.rooms.find((r) => r.kind === 'kitchen');
+  const living = g.rooms.find((r) => r.kind === 'living');
+  if (!kitchen || !living) return zones;
+
+  const between = wallsBetween(g, 'kitchen', 'living');
+  const name = 'Кухня-гостиная';
+  const base: DesignZone = { id: MERGED_KITCHEN_ZONE_ID, name, room: { ...living, id: MERGED_KITCHEN_ZONE_ID, name, kind: 'living' }, geometry: g };
+  const gas = d.engineering.some((p) => p.type === 'gas' && pointInPolygon(p.position, kitchen.polygon));
+  const union = rectUnion(kitchen.polygon, living.polygon);
+  let blockedReason: string | undefined;
+  if (between.length === 0) blockedReason = 'кухня и гостиная не соседствуют на плане';
+  else if (between.some((w) => w.status === 'load_bearing')) blockedReason = 'стена между кухней и гостиной несущая — её нельзя снести';
+  else if (gas) blockedReason = 'на кухне газ: открытое объединение с жилой комнатой обычно запрещено';
+  else if (!union) blockedReason = 'объединение комнат сложной формы пока не поддерживается';
+  if (blockedReason || !union) return [...zones, { ...base, blockedReason }];
+
+  const removed = new Set(between.map((w) => w.id));
+  const merged: Room = {
+    id: MERGED_KITCHEN_ZONE_ID,
+    name,
+    kind: 'living',
+    position: { x: (union[0]!.x + union[2]!.x) / 2, y: (union[0]!.y + union[2]!.y) / 2 },
+    polygon: union,
+  };
+  const geometry: PlanGeometry = {
+    ...g,
+    walls: g.walls.filter((w) => !removed.has(w.id)),
+    rooms: [...g.rooms.filter((r) => r.id !== kitchen.id && r.id !== living.id), merged],
+    openings: g.openings.filter((o) => !removed.has(o.wallId)),
+  };
+  const fk = roomFinishesOf(d.finishes, kitchen);
+  const fl = roomFinishesOf(d.finishes, living);
+  const finishes: RoomFinishes = {
+    ...fl,
+    furniture: [...new Set([...fk.furniture, ...fl.furniture])],
+    plumbing: [],
+  };
+  const unknownWall = between.some((w) => w.status === 'unknown');
+  return [
+    ...zones,
+    {
+      id: MERGED_KITCHEN_ZONE_ID,
+      name: unknownWall ? `${name} (после проверки стены)` : name,
+      room: merged,
+      geometry,
+      finishes,
+      mergedFrom: [
+        { name: kitchen.name, kind: kitchen.kind, finishes: fk },
+        { name: living.name, kind: living.kind, finishes: fl },
+      ],
+    },
+  ];
+}
+
+export function buildZoneBrief(d: ProjectDraft, zone: DesignZone): RoomBrief {
+  return buildRoomBrief(d, zone.room, { geometry: zone.geometry, finishes: zone.finishes, mergedFrom: zone.mergedFrom });
+}
+
