@@ -36,6 +36,21 @@ export interface PlanInfo {
    * «понимаю, что это демо», поэтому в метрику не засчитывается.
    */
   dimensionsConfirmed: boolean;
+  /** Описание квартиры словами (вариант «Описать словами») — из него строится план. */
+  description?: string;
+  /** Результат распознавания плана ИИ: что проверить клиенту. */
+  recognition?: PlanRecognitionInfo;
+}
+
+export interface PlanRecognitionInfo {
+  at: string;
+  model: string;
+  /** Сомнительные места, которые отметила модель. */
+  uncertain: string[];
+  /** Замечания проверки геометрии, которые не исправились автоматически. */
+  issues: string[];
+  /** Уточнения клиента, с которыми распознавали последний раз. */
+  notes?: string;
 }
 
 export interface Point {

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createEmptyDraft, createFinishes, type Project, type ProjectDraft, type RoomDesign } from '@air/domain';
+import { autoMarkWalls, createEmptyDraft, createFinishes, type PlanGeometry, type PlanRecognitionInfo, type Project, type ProjectDraft, type RoomDesign } from '@air/domain';
 import { DEMO_PLAN } from '../demo/demoPlan';
 import { defaultCurrency } from '../labels';
 import { DRAFT_FILE_KEY, fileStore, logFileError, projectFileKey } from './fileStore';
@@ -25,6 +25,11 @@ interface ProjectsState {
   startEditing: (projectId: string) => Promise<void>;
   saveDraft: (name: string) => Promise<string>;
   deleteProject: (id: string) => void;
+  /**
+   * Подставить распознанный план вместо демо: стены размечаются заново, отделка и инженерные точки
+   * сбрасываются — они привязаны к комнатам и координатам старого плана.
+   */
+  applyRecognizedPlan: (geometry: PlanGeometry, info: PlanRecognitionInfo) => void;
   /** Сохранить вариант дизайна комнаты от ИИ (храним 3 последних на комнату). */
   addRoomDesign: (projectId: string, design: RoomDesign) => void;
 }
@@ -77,11 +82,25 @@ export const useProjects = create<ProjectsState>()(
 
         setDraftStep: (draftStep) => set({ draftStep }),
 
+        applyRecognizedPlan: (geometry, info) => {
+          get().updateDraft((d) => {
+            d.geometry = { ...geometry, walls: autoMarkWalls(geometry.walls) };
+            d.finishes = { ...d.finishes, rooms: createFinishes(geometry).rooms };
+            d.engineering = [];
+            d.engineeringReviewed = false;
+            d.wallsReviewed = false;
+            d.plan.dimensionsConfirmed = false;
+            d.plan.recognition = info;
+          });
+        },
+
         setPlanFile: async (file) => {
           get().updateDraft((d) => {
             d.plan.fileName = file?.name;
             d.plan.fileType = file?.type;
             d.plan.dimensionsConfirmed = false;
+            // Новый файл — прошлое распознавание к нему не относится
+            delete d.plan.recognition;
           });
           setPreview(file);
           try {

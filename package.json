@@ -9,6 +9,7 @@
     "dev": "npm run dev -w @air/web",
     "dev:server": "npm run dev -w @air/server",
     "build": "npm run build -w @air/web",
+    "start": "npm run start -w @air/server",
     "test": "npm run test -w @air/domain",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

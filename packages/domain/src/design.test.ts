@@ -101,4 +101,12 @@ describe('дизайн от ИИ: проверка ответа', () => {
     expect(issues).toContain('подсветку');
     expect(issues).toContain('перекрывает инженерную точку (riser)');
   });
+
+  it('совет переносить слив — замечание, обычный совет — нет', () => {
+    const b = buildRoomBrief(draft(), room('living'));
+    const bad = validateRoomDesign(proposal([item({})], { notes: ['Слив мойки можно провести под полом или в коробе'] }), b).join(' | ');
+    expect(bad).toContain('переносить или удлинять слив');
+    const ok = validateRoomDesign(proposal([item({})], { notes: ['Мойка у стояка — короткий слив', 'Ковёр зонирует гостиную'] }), b).join(' | ');
+    expect(ok).not.toContain('слив —');
+  });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { Html, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -144,7 +144,10 @@ function Wall({ w, tex, color, doorColor }: { w: WallPiece; tex: Tex; color: str
 
 /** Высота основания предмета: мойка и варочная панель в гарнитуре — на столешнице; настенные — на стене. */
 function baseY(it: DesignItem, all: DesignItem[], wallTop: number): number {
-  if (it.mount === 'wall') {
+  // Зеркало и картина — всегда на стене (в старых вариантах модель иногда ставила их «на пол»,
+  // и зеркало оказывалось под раковиной); исключение — высокое напольное зеркало
+  const onWall = it.mount === 'wall' || it.kind === 'artwork' || (it.kind === 'mirror' && it.heightMm < 1400);
+  if (onWall) {
     const center = it.kind === 'artwork' || it.kind === 'mirror' ? 1.5 : 1.4 + (it.heightMm * M) / 2;
     return Math.max(0, Math.min(center, wallTop - (it.heightMm * M) / 2 - 0.05)) - (it.heightMm * M) / 2;
   }
@@ -160,10 +163,34 @@ function baseY(it: DesignItem, all: DesignItem[], wallTop: number): number {
   return 0;
 }
 
-function Item({ it, y }: { it: DesignItem; y: number }) {
+/** Высокая мебель у срезанной (невидимой с этого ракурса) стены загораживала бы комнату своей задней стенкой. */
+const TALL_M = 1.1;
+
+function Item({ it, y, ghost }: { it: DesignItem; y: number; ghost: boolean }) {
   const [hover, setHover] = useState(false);
+  const group = useRef<THREE.Group>(null);
+  useEffect(() => {
+    // Полупрозрачность вместо скрытия: предмет остаётся на месте, но комната за ним видна
+    group.current?.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const mat = m as THREE.Material & { userData: { baseOpacity?: number; baseTransparent?: boolean } };
+        if (mat.userData.baseOpacity === undefined) {
+          mat.userData.baseOpacity = mat.opacity;
+          mat.userData.baseTransparent = mat.transparent;
+        }
+        mat.transparent = ghost || !!mat.userData.baseTransparent;
+        mat.opacity = ghost ? Math.min(mat.userData.baseOpacity, 0.15) : mat.userData.baseOpacity;
+        mat.depthWrite = !ghost;
+        mat.needsUpdate = true;
+      }
+      mesh.castShadow = !ghost;
+    });
+  }, [ghost, it]);
   return (
     <group
+      ref={group}
       position={[it.x * M, y, it.y * M]}
       rotation={[0, (-it.rotationDeg * Math.PI) / 180, 0]}
       onPointerOver={(e) => {
@@ -182,6 +209,38 @@ function Item({ it, y }: { it: DesignItem; y: number }) {
       )}
     </group>
   );
+}
+
+/** Стены, которые с текущего ракурса не рисуются (камера с их внешней стороны). */
+function hiddenWallKey(walls: WallPiece[], cam: THREE.Vector3): string {
+  return walls.map((w) => ((cam.x - w.cx) * w.nx + (cam.z - w.cz) * w.nz < 0 ? '1' : '0')).join('');
+}
+
+/** Высокий предмет вплотную к срезанной стене — его делаем полупрозрачным. */
+function againstHiddenWall(it: DesignItem, walls: WallPiece[], hidden: string): boolean {
+  if (it.mount === 'wall' || it.heightMm * M < TALL_M) return false;
+  const x = it.x * M;
+  const z = it.y * M;
+  const reach = (Math.max(it.widthMm, it.depthMm) * M) / 2 + 0.25;
+  return walls.some((w, i) => {
+    if (hidden[i] !== '1' || w.kind !== 'wall') return false;
+    const t = (x - w.cx) * w.nz + (z - w.cz) * -w.nx;
+    if (Math.abs(t) > w.len / 2 + reach) return false;
+    return Math.abs((x - w.cx) * w.nx + (z - w.cz) * w.nz) < reach;
+  });
+}
+
+/** Следит за камерой и сообщает, какие стены срезаны; пересчёт только при смене набора. */
+function HiddenWallsTracker({ walls, onChange }: { walls: WallPiece[]; onChange: (key: string) => void }) {
+  const camera = useThree((s) => s.camera);
+  const ctl = useThree((s) => s.controls) as unknown as THREE.EventDispatcher<{ change: object }> | null;
+  useEffect(() => {
+    const update = () => onChange(hiddenWallKey(walls, camera.position));
+    update();
+    ctl?.addEventListener('change', update);
+    return () => ctl?.removeEventListener('change', update);
+  }, [walls, camera, ctl, onChange]);
+  return null;
 }
 
 /** Ближайший к точке участок стены — к нему крепятся LED-лента и бра. */
@@ -297,8 +356,17 @@ export default function RoomScene3D({ brief, design, wallHeightMm, resetSignal, 
   const camPos: [number, number, number] = [cx + dir.x * dist, dir.y * dist, cz + dir.z * dist];
 
   useEffect(() => {
-    if (resetSignal > 0) controls.current?.reset();
+    const c = controls.current;
+    if (resetSignal === 0 || !c) return;
+    // Без этого инерция недавнего вращения (damping) докручивает камеру уже после сброса
+    const damping = c.enableDamping;
+    c.enableDamping = false;
+    c.update();
+    c.reset();
+    c.enableDamping = damping;
   }, [resetSignal]);
+
+  const [hidden, setHidden] = useState('');
 
   return (
     <div style={{ width: '100%', height, borderRadius: 8, overflow: 'hidden', background: 'linear-gradient(#eef2f6, #dfe5eb)' }}>
@@ -317,6 +385,8 @@ export default function RoomScene3D({ brief, design, wallHeightMm, resetSignal, 
         />
         <OrbitControls ref={controls} makeDefault target={[cx, ceiling * 0.3, cz]} maxPolarAngle={Math.PI / 2.05} minDistance={0.4} maxDistance={dist * 2.5} />
 
+        <HiddenWallsTracker walls={walls} onChange={setHidden} />
+
         <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
           <shapeGeometry args={[floorShape]} />
           <meshStandardMaterial color={floorMap ? '#ffffff' : design.palette.floor} map={floorMap} roughness={fTex.roughness} side={THREE.DoubleSide} />
@@ -327,7 +397,7 @@ export default function RoomScene3D({ brief, design, wallHeightMm, resetSignal, 
         ))}
 
         {design.items.map((it, i) => (
-          <Item key={i} it={it} y={baseY(it, design.items, wallH)} />
+          <Item key={i} it={it} y={baseY(it, design.items, wallH)} ghost={againstHiddenWall(it, walls, hidden)} />
         ))}
 
         {design.lights.map((l, i) => (

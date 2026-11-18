@@ -6,3 +6,5 @@ export * from './wizard';
 export * from './finishes';
 export * from './design';
 export * from './catalog';
+export * from './planRecognition';
+export * from './furniturePlan';

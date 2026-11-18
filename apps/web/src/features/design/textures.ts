@@ -128,7 +128,13 @@ export function wallTexture(kind: WallFinish | undefined, color: string): Tex {
         map: canvas((c) => {
           c.fillStyle = color;
           c.fillRect(0, 0, SIZE, SIZE);
-          c.fillStyle = shade(color, -0.06);
+          // Контраст заметный даже на светлом фоне и при освещении сцены: полосы + ромбы
+          const n = 8;
+          for (let i = 0; i < n; i += 2) {
+            c.fillStyle = shade(color, -0.07);
+            c.fillRect((i * SIZE) / n, 0, SIZE / n, SIZE);
+          }
+          c.fillStyle = shade(color, -0.2);
           const step = SIZE / 8;
           for (let y = 0; y < 8; y++) {
             for (let x = 0; x < 8; x++) {

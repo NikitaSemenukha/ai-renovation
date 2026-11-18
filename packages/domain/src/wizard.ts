@@ -96,6 +96,7 @@ export function stepMissing(step: WizardStepId, d: ProjectDraft): string[] {
       const { source, fileName } = d.plan;
       if (!source) m.push('выберите, какой план у вас есть');
       else if (source !== 'manual' && source !== 'none' && !fileName) m.push('загрузите файл плана');
+      else if (source === 'manual' && d.geometry.source === 'demo') m.push('опишите квартиру и постройте план');
       break;
     }
     case 'dimensions':

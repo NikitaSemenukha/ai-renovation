@@ -7,3 +7,7 @@ dist
 # записи созвонов и прочие видео
 *.mp4
 *.mov
+
+# результаты ручных прогонов scripts/try-plan.ts
+*.result.png
+*.result.json

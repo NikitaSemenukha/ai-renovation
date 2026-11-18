@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { InboxOutlined } from '@ant-design/icons';
-import { Alert, App, Typography, Upload } from 'antd';
+import { Alert, App, Input, Typography, Upload } from 'antd';
 import type { PlanSource } from '@air/domain';
 import { ChoiceCards } from '../../../components/ChoiceCards';
+import { PlanRecognizer } from '../../plan/PlanRecognizer';
 import { FILE_PLAN_SOURCES, PLAN_SOURCE_LABELS } from '../../../labels';
 import { useProjects } from '../../../store/projectsStore';
+import { usePlanRecognition } from '../../../store/planRecognitionStore';
 import { useDraft } from '../useDraft';
 
 const SOURCES = Object.keys(PLAN_SOURCE_LABELS) as PlanSource[];
@@ -27,9 +29,19 @@ export function PlanStep() {
   const { message } = App.useApp();
   const previewUrl = useProjects((s) => s.planPreviewUrl);
   const setPlanFile = useProjects((s) => s.setPlanFile);
+  const runRecognition = usePlanRecognition((s) => s.run);
   const { source, fileName, fileType } = draft.plan;
   const needsFile = source !== undefined && FILE_PLAN_SOURCES.includes(source);
   const [brokenPreview, setBrokenPreview] = useState<string>();
+  const recognized = draft.geometry.source !== 'demo' && draft.plan.recognition;
+  const recognizedNote = recognized && (
+    <Alert
+      type="success"
+      showIcon
+      title={`План построен: ${draft.geometry.rooms.length} помещ. — ${draft.geometry.rooms.map((r) => r.name).join(', ')}`}
+      description="Сверьте его с оригиналом на следующем шаге «Размеры» — там же можно попросить исправить ошибки."
+    />
+  );
 
   return (
     <>
@@ -54,8 +66,9 @@ export function PlanStep() {
                 return Upload.LIST_IGNORE;
               }
               setBrokenPreview(undefined);
-              void setPlanFile(file);
-              return false; // на сервер не отправляем: бэкенда пока нет
+              // Сразу распознаём: иначе клиент жмёт «Далее» и видит демо-план вместо своей квартиры
+              void setPlanFile(file).then(() => runRecognition('file'));
+              return false; // файл хранится в браузере; на сервер уходит только для распознавания
             }}
           >
             <p className="ant-upload-drag-icon"><InboxOutlined /></p>
@@ -74,22 +87,34 @@ export function PlanStep() {
           )}
           {fileName && fileType === 'application/pdf' && (
             <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
-              PDF сохранён. Превью PDF появится вместе с распознаванием.
+              PDF сохранён. Если в нём несколько страниц, распознаётся страница с планом квартиры.
             </Typography.Paragraph>
           )}
-          <Alert
-            style={{ marginTop: 12 }}
-            type="info"
-            showIcon
-            title="Прототип: файл хранится только в вашем браузере"
-            description="Автоматическое распознавание стен, дверей и размеров будет добавлено на следующем этапе. Пока дальше используется демо-план."
-          />
+          {fileName && (
+            <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {recognizedNote}
+              <PlanRecognizer mode="file" label={recognized ? 'Распознать заново' : 'Распознать план'} secondary={Boolean(recognized)} />
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Файл отправляется на сервер только для распознавания и там не сохраняется. Лучше всего читаются техпаспорт и план застройщика с подписанными размерами.
+              </Typography.Text>
+            </div>
+          )}
         </div>
       )}
 
       {source === 'manual' && (
-        <Alert style={{ marginTop: 20 }} type="info" showIcon title="Ручной редактор плана — следующий этап"
-          description="Пока для прохождения мастера используется демо-план." />
+        <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Input.TextArea
+            rows={6}
+            maxLength={4000}
+            showCount
+            value={draft.plan.description ?? ''}
+            onChange={(e) => update((d) => void (d.plan.description = e.target.value))}
+            placeholder={'Например: двухкомнатная, 52 м². Вход в коридор 1,8×4 м. Слева кухня 3,5×3 м с окном, за ней гостиная 4×4,5 м. Справа санузел совмещённый 2×2,2 м и спальня 3,6×4 м с окном на балкон. Стена между кухней и гостиной — перегородка.'}
+          />
+          {recognizedNote}
+          <PlanRecognizer mode="text" label={recognized ? 'Построить заново' : 'Построить план'} secondary={Boolean(recognized)} />
+        </div>
       )}
 
       {source === 'none' && (
@@ -102,7 +127,8 @@ export function PlanStep() {
             <Typography.Paragraph style={{ marginBottom: 0 }}>
               1. Нарисуйте от руки схему квартиры. 2. Рулеткой или лазерным дальномером измерьте длину каждой стены по полу.
               3. Отметьте двери, окна и толщину стен в проёмах. 4. Сфотографируйте схему и вернитесь к этому шагу.
-              Пока для прохождения мастера используется демо-план.
+              Или выберите «Описать словами» и перечислите комнаты с размерами — план построим по описанию.
+              Без плана дальше используется демо-квартира.
             </Typography.Paragraph>
           }
         />

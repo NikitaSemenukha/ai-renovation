@@ -149,7 +149,7 @@ export function PlanCanvas({
 }
 
 /** Окно — двойная голубая линия в стене; дверь — проём с дугой открывания. */
-function OpeningMark({ opening, geometry }: { opening: Opening; geometry: PlanGeometry }) {
+export function OpeningMark({ opening, geometry }: { opening: Opening; geometry: PlanGeometry }) {
   const wall = geometry.walls.find((w) => w.id === opening.wallId);
   if (!wall) return null;
   const dx = wall.b.x - wall.a.x;

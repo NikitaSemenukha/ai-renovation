@@ -3,6 +3,7 @@ import type {
   EngineeringPointType,
   InterventionLevel,
   PlanSource,
+  RoomKind,
   ProjectGoal,
   ProjectStage,
   PropertyType,
@@ -80,7 +81,7 @@ export const PLAN_SOURCE_LABELS: Record<PlanSource, { title: string; hint: strin
   tech_passport: { title: 'Техпаспорт (БТИ)', hint: 'Лучший вариант: размеры, площади, толщина стен' },
   developer_plan: { title: 'План от застройщика', hint: 'Размеры, иногда колонны и пилоны' },
   photo: { title: 'Фото плана / скрин объявления', hint: 'Форма помещений, масштаб уточним' },
-  manual: { title: 'Нарисовать самому', hint: 'Ручной редактор плана' },
+  manual: { title: 'Описать словами', hint: 'Перечислите комнаты и размеры — план построим сами' },
   none: { title: 'Нет плана', hint: 'Подскажем, как сделать замер' },
 };
 
@@ -146,4 +147,13 @@ export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   one_to_three_months: 'Через 1–3 месяца',
   half_year_plus: 'Через полгода и позже',
   exploring: 'Пока изучаю',
+};
+
+export const ROOM_KIND_LABELS: Record<RoomKind, string> = {
+  kitchen: 'Кухня',
+  living: 'Гостиная',
+  bedroom: 'Спальня',
+  bathroom: 'Санузел',
+  hall: 'Коридор',
+  other: 'Другое',
 };

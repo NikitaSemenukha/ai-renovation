@@ -221,7 +221,7 @@ export function briefHash(brief: RoomBrief): string {
 
 // ---------- Проверка ответа модели ----------
 
-interface Rect {
+export interface Rect {
   x1: number;
   y1: number;
   x2: number;
@@ -270,6 +270,15 @@ export const MAX_DISTANCE_TO_RISER_MM: Partial<Record<DesignItemKind, number>> =
   bathtub: 3000,
   washer: 3000,
 };
+
+/**
+ * В кухне-гостиной кухонная часть должна стоять у стояка: при открытой планировке мойку легко
+ * «увести» на дальнюю стену, а слив потом прячут под полом или в коробе. Тоже гипотеза.
+ */
+export const MAX_SINK_TO_RISER_MERGED_MM = 2000;
+
+/** Советы, которые предлагают удлинять или переносить канализацию вместо перестановки. */
+const DRAIN_WORKAROUND = /(слив|канализац|трасс|стояк)[^.;]{0,60}(под пол|в короб|в пол|перен|протян|тянуть|удлин)|(под пол|в короб|перен|протян|тянуть|удлин)[^.;]{0,60}(слив|канализац|стояк)/i;
 
 function distanceToRect(pt: Point, r: Rect): number {
   const dx = Math.max(r.x1 - pt.x, 0, pt.x - r.x2);
@@ -340,12 +349,19 @@ export function validateRoomDesign(p: RoomDesignProposal, brief: RoomBrief): str
   const risers = brief.engineering.filter((e) => e.type === 'riser');
   if (risers.length) {
     for (const it of p.items) {
-      const limit = MAX_DISTANCE_TO_RISER_MM[it.kind];
-      if (!limit) continue;
+      const base = MAX_DISTANCE_TO_RISER_MM[it.kind];
+      if (!base) continue;
+      const limit = it.kind === 'sink' && brief.mergedFrom ? Math.min(base, MAX_SINK_TO_RISER_MERGED_MM) : base;
       const dist = Math.min(...risers.map((r) => distanceToRect(r.at, itemFootprint(it))));
       if (dist > limit) {
         issues.push(`${label(it)} в ${(dist / 1000).toFixed(1)} м от стояка — для ${it.kind} не дальше ${(limit / 1000).toFixed(1)} м, иначе нужна длинная канализация с уклоном`);
       }
+    }
+  }
+
+  for (const n of p.notes) {
+    if (DRAIN_WORKAROUND.test(n)) {
+      issues.push(`совет «${n.slice(0, 80)}» предлагает переносить или удлинять слив — вместо этого поставь мокрые точки у стояка и убери этот совет`);
     }
   }
 

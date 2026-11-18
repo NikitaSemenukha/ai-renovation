@@ -1,14 +1,19 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { existsSync, readFileSync } from 'node:fs';
+import { relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { designZones, type ProjectDraft } from '@air/domain';
 import { loadCatalog } from './catalog';
 import { DESIGN_MODEL, DesignError, designZone } from './designer';
+import { recognizePlan, type PlanInput } from './planReader';
 
 /**
- * API прототипа. Сейчас один эндпоинт — дизайн комнаты от ИИ.
+ * API прототипа: распознавание плана и дизайн комнаты от ИИ.
  * Ключ Anthropic живёт только здесь (apps/server/.env), во фронтенд не попадает.
  */
 
@@ -54,6 +59,38 @@ const RequestSchema = z.object({
   }),
 });
 
+const PlanRequestSchema = z
+  .object({
+    file: z.object({ mediaType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']), base64: z.string().min(100) }).optional(),
+    description: z.string().min(20).max(4000).optional(),
+    notes: z.string().max(2000).optional(),
+  })
+  .refine((v) => v.file || v.description, 'Нужен файл плана или описание');
+
+/** Ошибки вызова ИИ — в понятный клиенту ответ; подробности только в лог сервера. */
+function aiErrorResponse(err: unknown, tag: string, signal: AbortSignal): Response {
+  const json = (body: object, status: number) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  if (err instanceof Anthropic.APIUserAbortError || signal.aborted) {
+    console.info(`[${tag}] отменено клиентом`);
+    // Ответ клиент уже не ждёт; 499 — «клиент закрыл запрос»
+    return new Response(null, { status: 499 });
+  }
+  if (err instanceof DesignError) return json({ error: err.message }, err.status);
+  if (err instanceof Anthropic.AuthenticationError) {
+    console.error(`[${tag}] invalid API key`);
+    return json({ error: 'Ключ Anthropic не принят. Проверьте ANTHROPIC_API_KEY.' }, 503);
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return json({ error: 'Сервис ИИ перегружен или исчерпан лимит аккаунта. Попробуйте через минуту.' }, 503);
+  }
+  if (err instanceof Anthropic.APIError) {
+    console.error(`[${tag}] API error ${err.status}: ${err.message}`);
+    return json({ error: 'Ошибка сервиса ИИ. Попробуйте ещё раз.' }, 502);
+  }
+  console.error(`[${tag}] unexpected`, err);
+  return json({ error: 'Внутренняя ошибка сервера' }, 502);
+}
+
 const app = new Hono();
 
 app.get('/api/health', (c) => c.json({ ok: true, ai: hasKey ? 'configured' : 'missing_key', model: DESIGN_MODEL }));
@@ -82,28 +119,42 @@ app.post('/api/design/room', bodyLimit({ maxSize: 1024 * 1024 }), async (c) => {
   try {
     return c.json(await designZone(getClient(), draft, zone, loadCatalog(), c.req.raw.signal));
   } catch (err) {
-    if (err instanceof Anthropic.APIUserAbortError || c.req.raw.signal.aborted) {
-      console.info(`[design] zone=${zone.id} отменено клиентом`);
-      // Ответ клиент уже не ждёт; 499 — «клиент закрыл запрос»
-      return new Response(null, { status: 499 });
-    }
-    if (err instanceof DesignError) return c.json({ error: err.message }, err.status);
-    if (err instanceof Anthropic.AuthenticationError) {
-      console.error('[design] invalid API key');
-      return c.json({ error: 'Ключ Anthropic не принят. Проверьте ANTHROPIC_API_KEY.' }, 503);
-    }
-    if (err instanceof Anthropic.RateLimitError) {
-      return c.json({ error: 'Сервис ИИ перегружен или исчерпан лимит аккаунта. Попробуйте через минуту.' }, 503);
-    }
-    if (err instanceof Anthropic.APIError) {
-      console.error(`[design] API error ${err.status}: ${err.message}`);
-      return c.json({ error: 'Ошибка сервиса ИИ. Попробуйте ещё раз.' }, 502);
-    }
-    console.error('[design] unexpected', err);
-    return c.json({ error: 'Внутренняя ошибка сервера' }, 502);
+    return aiErrorResponse(err, `design zone=${zone.id}`, c.req.raw.signal);
   }
 });
 
-serve({ fetch: app.fetch, port: PORT }, () => {
-  console.info(`[server] http://localhost:${PORT}  AI: ${hasKey ? DESIGN_MODEL : 'ключ не задан (apps/server/.env)'}`);
+/** Распознавание плана: файл (картинка/PDF, base64) или текстовое описание квартиры. */
+app.post('/api/plan/recognize', bodyLimit({ maxSize: 32 * 1024 * 1024, onError: (c) => c.json({ error: 'Файл слишком большой для распознавания' }, 413) }), async (c) => {
+  if (!hasKey) {
+    return c.json({ error: 'ИИ не настроен: добавьте ANTHROPIC_API_KEY в apps/server/.env и перезапустите сервер.' }, 503);
+  }
+  const ip = c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  if (!allow(ip)) return c.json({ error: `Лимит: не больше ${RATE_LIMIT_PER_HOUR} запросов к ИИ в час. Попробуйте позже.` }, 429);
+
+  const parsed = PlanRequestSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'Нужен файл плана (JPG, PNG, WebP, PDF) или описание квартиры от 20 символов' }, 400);
+  const { file, description, notes } = parsed.data;
+  const input: PlanInput = file ? { kind: 'file', ...file } : { kind: 'text', description: description! };
+
+  try {
+    return c.json(await recognizePlan(getClient(), input, notes, c.req.raw.signal));
+  } catch (err) {
+    return aiErrorResponse(err, 'plan', c.req.raw.signal);
+  }
+});
+
+// Продакшен: собранный сайт (npm run build → apps/web/dist) отдаёт этот же сервер — один процесс, один порт.
+// В разработке сайт отдаёт Vite (npm run dev), а сюда проксирует только /api.
+const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
+const hasWeb = existsSync(`${webDist}/index.html`);
+if (hasWeb) {
+  app.use('/*', serveStatic({ root: relative(process.cwd(), webDist) }));
+  // Маршруты приложения (/projects/…) обслуживает React Router — отдаём index.html
+  const indexHtml = readFileSync(`${webDist}/index.html`, 'utf-8');
+  app.get('*', (c) => (c.req.path.startsWith('/api/') ? c.json({ error: 'Не найдено' }, 404) : c.html(indexHtml)));
+}
+
+const HOST = process.env.HOST ?? '0.0.0.0';
+serve({ fetch: app.fetch, port: PORT, hostname: HOST }, () => {
+  console.info(`[server] http://${HOST}:${PORT}  AI: ${hasKey ? DESIGN_MODEL : 'ключ не задан (apps/server/.env)'}  сайт: ${hasWeb ? 'apps/web/dist' : 'не собран (npm run build) — в разработке используйте npm run dev'}`);
 });
